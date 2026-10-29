@@ -3,7 +3,8 @@
 Skaar developer overlay (client side), drawn by the engine so it works even
 when a game module fails to load:
   - toasts: warnings/errors/asserts, small, in the bottom-right for 5 seconds
-  - error panel: full-screen message after an ERR_DROP, with the log path
+  - error panel: full-screen message after an ERR_DROP, with the log path,
+    only when no ui module is loaded to show it
   - dev_overlay 1: FPS, frame time, tick rate, ping, entities, last warnings
   - sens_test: measure mouse counts per 360 to verify cm/360
 
@@ -201,7 +202,7 @@ void CL_DevDraw( void ) {
 		return;
 	}
 
-	error = Dev_RecentError( ERROR_PANEL_MSEC );
+	error = uivm ? NULL : Dev_RecentError( ERROR_PANEL_MSEC );
 	if ( error && clc.state != CA_ACTIVE ) {
 		CL_DevDrawErrorPanel( error );
 	}
@@ -282,12 +283,9 @@ static void CL_DevSensTest_f( void ) {
 void CL_DevInit( void ) {
 	dev_overlay = Cvar_Get( "dev_overlay", "0", CVAR_ARCHIVE );
 	Cvar_SetDescription( dev_overlay, "Corner panel: FPS, frame time, tick rate, ping, entities, last warnings" );
-	// toasts are a developer aid: on in dev builds, off for players
-#ifdef SKAAR_DEV
-	dev_toasts = Cvar_Get( "dev_toasts", "1", CVAR_ARCHIVE );
-#else
+	// opt-in: nothing in the console font shows on screen unless asked for;
+	// dev builds stream warnings to the launching terminal instead
 	dev_toasts = Cvar_Get( "dev_toasts", "0", CVAR_ARCHIVE );
-#endif
 	Cvar_SetDescription( dev_toasts, "Show warnings and errors as small toasts in the bottom-right for 5 seconds" );
 	sens_dpi = Cvar_Get( "sens_dpi", "0", CVAR_ARCHIVE );
 	Cvar_SetDescription( sens_dpi, "Mouse DPI, used by sens_test to report cm/360" );

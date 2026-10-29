@@ -31,7 +31,6 @@ void AddCommand(const char* name);
 void RemoveCommand(const char* name);
 void SendClientCommand(const char* text);
 void SendConsoleCommand(const char* text);
-void UpdateScreen();
 bool FileRead(const char* path, std::string& out);
 bool FileWrite(const char* path, const std::string& data, bool append);
 int RealTime(qtime_t* t);
@@ -63,8 +62,6 @@ int GetCurrentCmdNumber();
 bool GetUserCmd(int cmdNumber, usercmd_t* cmd);
 void SetUserCmdValue(int stateValue, float sensitivityScale);
 int Key_GetCatcher();
-void Key_SetCatcher(int catcher);
-bool Key_IsDown(int key);
 
 sfxHandle_t S_RegisterSound(const char* name, bool compressed);
 void S_StartLocalSound(sfxHandle_t sfx, int channel);

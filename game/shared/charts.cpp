@@ -67,25 +67,6 @@ void LineCore(float x0, float y0, float x1, float y1, float thickness, int strid
 
 }  // namespace
 
-void Line(float x0, float y0, float x1, float y1, Color color, float thickness) {
-    if (!g_white) {
-        return;
-    }
-    SetColor(color);
-    LineCore(x0, y0, x1, y1, thickness);
-    ResetColor();
-}
-
-void Dot(float x, float y, float size, Color color) {
-    if (!g_white) {
-        return;
-    }
-    const float s = std::max(1.0f, std::round(ToPx(size)));
-    SetColor(color);
-    Px(std::round(ToPx(x) - s / 2), std::round(ToPx(y) - s / 2), s, s);
-    ResetColor();
-}
-
 void Dots(const std::vector<float>& xy, float size, Color color) {
     if (!g_white || xy.size() < 2) {
         return;

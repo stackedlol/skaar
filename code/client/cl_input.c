@@ -372,6 +372,19 @@ void CL_MouseEvent( int dx, int dy, int time ) {
 
 /*
 =================
+CL_MousePosition
+
+skaar: windowed menus use the system cursor; this is where it is
+=================
+*/
+void CL_MousePosition( int x, int y ) {
+	if ( Key_GetCatcher( ) & KEYCATCH_UI ) {
+		VM_Call( uivm, UI_MOUSE_POSITION, x, y );
+	}
+}
+
+/*
+=================
 CL_JoystickEvent
 
 Joystick values stay set until changed

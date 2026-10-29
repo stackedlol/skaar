@@ -59,7 +59,6 @@ static cvar_t *in_joystickThreshold = NULL;
 static cvar_t *in_joystickNo        = NULL;
 static cvar_t *in_joystickUseAnalog = NULL;
 
-static int vidRestartTime = 0;
 
 static int in_eventTime = 0;
 
@@ -395,6 +394,18 @@ static void IN_ReportMouseSource( void )
 
 /*
 ===============
+IN_MenuCursor
+
+skaar: menus in a window follow the system cursor instead of grabbing the mouse
+===============
+*/
+static qboolean IN_MenuCursor( void )
+{
+	return !cls.glconfig.isFullscreen && ( Key_GetCatcher( ) & KEYCATCH_UI );
+}
+
+/*
+===============
 IN_ActivateMouse
 ===============
 */
@@ -531,6 +542,10 @@ static void IN_InitJoystick( void )
 	gamepad = NULL;
 	memset(&stick_state, '\0', sizeof (stick_state));
 
+	// skaar: no joystick subsystem and device scan (~12 ms at startup) unless it's enabled
+	if( !in_joystick->integer )
+		return;
+
 	// SDL 2.0.4 requires SDL_INIT_JOYSTICK to be initialized separately from
 	// SDL_INIT_GAMECONTROLLER for SDL_JoystickOpen() to work correctly,
 	// despite https://wiki.libsdl.org/SDL_Init (retrieved 2016-08-16)
@@ -571,12 +586,6 @@ static void IN_InitJoystick( void )
 
 	// Update cvar on in_restart or controller add/remove.
 	Cvar_Set( "in_availableJoysticks", buf );
-
-	if( !in_joystick->integer ) {
-		Com_DPrintf( "Joystick is not active.\n" );
-		SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
-		return;
-	}
 
 	in_joystickNo = Cvar_Get( "in_joystickNo", "0", CVAR_ARCHIVE );
 	if( in_joystickNo->integer < 0 || in_joystickNo->integer >= total )
@@ -1185,6 +1194,15 @@ static void IN_ProcessEvents( void )
 					Dev_NoteInput( Dev_Microseconds( ) );
 					Com_QueueEvent( in_eventTime, SE_MOUSE, e.motion.xrel, e.motion.yrel, 0, NULL );
 				}
+				else if( IN_MenuCursor( ) )
+				{
+					// skaar: window points to drawable pixels, where the menu draws
+					int w, h;
+					SDL_GetWindowSize( SDL_window, &w, &h );
+					if( w > 0 && h > 0 )
+						Com_QueueEvent( in_eventTime, SE_MOUSE_POS, e.motion.x * cls.glconfig.vidWidth / w,
+							e.motion.y * cls.glconfig.vidHeight / h, 0, NULL );
+				}
 				break;
 
 			case SDL_MOUSEBUTTONDOWN:
@@ -1231,41 +1249,8 @@ static void IN_ProcessEvents( void )
 			case SDL_WINDOWEVENT:
 				switch( e.window.event )
 				{
-					case SDL_WINDOWEVENT_RESIZED:
-						{
-							int width, height;
-
-							width = e.window.data1;
-							height = e.window.data2;
-
-							// ignore this event on fullscreen
-							if( cls.glconfig.isFullscreen )
-							{
-								break;
-							}
-
-							// check if size actually changed
-							// (skaar: vidWidth/Height are drawable pixels, the event is in points)
-							{
-								int drawableWidth = width, drawableHeight = height;
-								SDL_GL_GetDrawableSize( SDL_window, &drawableWidth, &drawableHeight );
-								if( cls.glconfig.vidWidth == drawableWidth && cls.glconfig.vidHeight == drawableHeight )
-								{
-									break;
-								}
-							}
-
-							Cvar_SetValue( "r_customwidth", width );
-							Cvar_SetValue( "r_customheight", height );
-							Cvar_Set( "r_mode", "-1" );
-
-							// Wait until user stops dragging for 1 second, so
-							// we aren't constantly recreating the GL context while
-							// he tries to drag...
-							vidRestartTime = Sys_Milliseconds( ) + 1000;
-						}
-						break;
-
+					// skaar: a resize needs no event handling: the renderer follows the
+					// drawable size every frame (re.ResizeVideo), without vid_restart
 					case SDL_WINDOWEVENT_MINIMIZED:    Cvar_SetValue( "com_minimized", 1 ); break;
 					case SDL_WINDOWEVENT_RESTORED:
 					case SDL_WINDOWEVENT_MAXIMIZED:    Cvar_SetValue( "com_minimized", 0 ); break;
@@ -1318,6 +1303,9 @@ void IN_Frame( void )
 
 	// update isFullscreen since it might of changed since the last vid_restart
 	cls.glconfig.isFullscreen = Cvar_VariableIntegerValue( "r_fullscreen" ) != 0;
+#ifdef __APPLE__
+	Sys_OSX_SetFullscreen( ( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_FULLSCREEN ) != 0 );
+#endif
 
 	if( !cls.glconfig.isFullscreen && ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) )
 	{
@@ -1327,6 +1315,11 @@ void IN_Frame( void )
 	else if( !cls.glconfig.isFullscreen && loading )
 	{
 		// Loading in windowed mode
+		IN_DeactivateMouse( cls.glconfig.isFullscreen );
+	}
+	else if( IN_MenuCursor( ) )
+	{
+		// skaar: a menu in windowed mode uses the system cursor, free to leave the window
 		IN_DeactivateMouse( cls.glconfig.isFullscreen );
 	}
 	else if( !( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_INPUT_FOCUS ) )
@@ -1364,13 +1357,6 @@ void IN_Frame( void )
 
 	// Set event time for next frame to earliest possible time an event could happen
 	in_eventTime = Sys_Milliseconds( );
-
-	// In case we had to delay actual restart of video system
-	if( ( vidRestartTime != 0 ) && ( vidRestartTime < Sys_Milliseconds( ) ) )
-	{
-		vidRestartTime = 0;
-		Cbuf_AddText( "vid_restart\n" );
-	}
 }
 
 /*
@@ -1389,6 +1375,9 @@ void IN_Init( void *windowData )
 	}
 
 	SDL_window = (SDL_Window *)windowData;
+#ifdef __APPLE__
+	Sys_OSX_InitWindow( SDL_window );
+#endif
 
 	Com_DPrintf( "\n------- Input Initialization -------\n" );
 

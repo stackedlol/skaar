@@ -14,8 +14,10 @@ list(APPEND COMMON_LIBRARIES "-framework Cocoa")
 list(APPEND CLIENT_LIBRARIES "-framework IOKit")
 # skaar: raw (unaccelerated) mouse motion via GCMouse; weak so macOS 11-13 still launch
 list(APPEND CLIENT_LIBRARIES "-weak_framework GameController")
-list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx_rawmouse.m)
+list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx_rawmouse.m ${SOURCE_DIR}/sys/sys_osx_window.m)
 list(APPEND RENDERER_LIBRARIES "-framework OpenGL")
+# skaar: drop every function and datum nothing references from the binaries
+add_link_options(-Wl,-dead_strip)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
 # Universal by default; pass -DCMAKE_OSX_ARCHITECTURES=arm64 for faster dev builds

@@ -55,6 +55,7 @@ struct Input {
     float mx = 0, my = 0;
     bool mouseMoved = false;
     bool mouseUsed = false;   // the pointer has moved since the screen opened
+    bool systemCursor = false;  // windowed: the OS draws the pointer
     bool click = false;       // mouse1 went down
     bool mouseDown = false;   // mouse1 is held (slider drags)
     int wheel = 0;            // + up
@@ -82,6 +83,7 @@ struct Data {
 
 struct State {
     glconfig_t glconfig{};
+    vmCvar_t vidSize{};  // r_vidSize: changes when the window's drawable size does
     Screen screen = Screen::kNone;
     bool fromGame = false;    // inner screens opened from the pause menu return there
     int realtime = 0;

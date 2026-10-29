@@ -2219,6 +2219,111 @@ static cvar_t *s_alCapture;
 #define ALDRIVER_DEFAULT "libopenal.so.1"
 #endif
 
+#ifdef __APPLE__
+#include <dlfcn.h>
+#include <pthread.h>
+
+static pthread_t	alWarmThread;
+static qboolean		alWarmThreadRunning;
+static ALCdevice	*alWarmDevice;
+static ALCcontext	*alWarmContext;
+static void (ALC_APIENTRY *alWarmDestroyContext)( ALCcontext * );
+static ALCboolean (ALC_APIENTRY *alWarmCloseDevice)( ALCdevice * );
+
+static void *S_AL_WarmUpThread( void *unused )
+{
+	// stays loaded: QAL_Init opens the same image
+	void *lib = dlopen( ALDRIVER_DEFAULT, RTLD_NOW | RTLD_LOCAL );
+	ALCdevice *(ALC_APIENTRY *openDevice)( const ALCchar * );
+	ALCcontext *(ALC_APIENTRY *createContext)( ALCdevice *, const ALCint * );
+	ALCboolean (ALC_APIENTRY *makeCurrent)( ALCcontext * );
+
+	if( !lib )
+		return NULL;
+	openDevice = dlsym( lib, "alcOpenDevice" );
+	createContext = dlsym( lib, "alcCreateContext" );
+	makeCurrent = dlsym( lib, "alcMakeContextCurrent" );
+	alWarmDestroyContext = dlsym( lib, "alcDestroyContext" );
+	alWarmCloseDevice = dlsym( lib, "alcCloseDevice" );
+	if( !openDevice || !createContext || !makeCurrent || !alWarmDestroyContext || !alWarmCloseDevice )
+		return NULL;
+
+	alWarmDevice = openDevice( NULL );
+	if( !alWarmDevice )
+		return NULL;
+	alWarmContext = createContext( alWarmDevice, NULL );
+	if( !alWarmContext )
+	{
+		alWarmCloseDevice( alWarmDevice );
+		alWarmDevice = NULL;
+		return NULL;
+	}
+	// Apple's current context is process-wide, not per thread
+	makeCurrent( alWarmContext );
+	return NULL;
+}
+
+static qboolean S_AL_CvarOn( const char *name )
+{
+	const char *value = Cvar_VariableString( name );
+
+	return !*value || atoi( value );
+}
+#endif
+
+/*
+=================
+S_AL_WarmUp
+
+skaar: the first OpenAL device open wakes Core Audio (~60-100 ms on an M1).
+Called at client init, so the default device is opened and made current on a
+thread while the window and GL context are created; S_AL_Init adopts it.
+Only when the config will use that device, so it never opens one for nothing.
+=================
+*/
+void S_AL_WarmUp( void )
+{
+#ifdef __APPLE__
+	const char *driver = Cvar_VariableString( "s_alDriver" );
+
+	if( !S_AL_CvarOn( "s_initsound" ) || !S_AL_CvarOn( "s_useOpenAL" ) ||
+			( *driver && Q_stricmp( driver, ALDRIVER_DEFAULT ) ) || *Cvar_VariableString( "s_alDevice" ) )
+		return;
+	alWarmThreadRunning = pthread_create( &alWarmThread, NULL, S_AL_WarmUpThread, NULL ) == 0;
+#endif
+}
+
+/*
+=================
+S_AL_WarmUpTake
+
+Waits for S_AL_WarmUp. Adopts its device and context if use is set, else closes them.
+=================
+*/
+static void S_AL_WarmUpTake( qboolean use )
+{
+#ifdef __APPLE__
+	if( !alWarmThreadRunning )
+		return;
+	pthread_join( alWarmThread, NULL );
+	alWarmThreadRunning = qfalse;
+	if( !alWarmDevice )
+		return;
+	if( use )
+	{
+		alDevice = alWarmDevice;
+		alContext = alWarmContext;
+	}
+	else
+	{
+		alWarmDestroyContext( alWarmContext );
+		alWarmCloseDevice( alWarmDevice );
+	}
+	alWarmDevice = NULL;
+	alWarmContext = NULL;
+#endif
+}
+
 /*
 =================
 S_AL_StopAllSounds
@@ -2537,6 +2642,7 @@ qboolean S_AL_Init( soundInterface_t *si )
 	{
 		Com_Printf( "Failed to load library: \"%s\".\n", s_alDriver->string );
 		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			S_AL_WarmUpTake( qfalse );
 			return qfalse;
 		}
 	}
@@ -2544,6 +2650,10 @@ qboolean S_AL_Init( soundInterface_t *si )
 	device = s_alDevice->string;
 	if(device && !*device)
 		device = NULL;
+
+	alDevice = NULL;
+	alContext = NULL;
+	S_AL_WarmUpTake( !device && !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) );
 
 	inputdevice = s_alInputDevice->string;
 	if(inputdevice && !*inputdevice)
@@ -2606,7 +2716,8 @@ qboolean S_AL_Init( soundInterface_t *si )
 		s_alAvailableDevices = Cvar_Get("s_alAvailableDevices", devicenames, CVAR_ROM | CVAR_NORESTART);
 	}
 
-	alDevice = qalcOpenDevice(device);
+	if( !alDevice )
+		alDevice = qalcOpenDevice(device);
 	if( !alDevice && device )
 	{
 		Com_Printf( "Failed to open OpenAL device '%s', trying default.\n", device );
@@ -2621,7 +2732,8 @@ qboolean S_AL_Init( soundInterface_t *si )
 	}
 
 	// Create OpenAL context
-	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+		alContext = qalcCreateContext( alDevice, NULL );
 	if( !alContext )
 	{
 		QAL_Shutdown( );

@@ -325,7 +325,7 @@ void Footer(const std::string& hints) {
 }
 
 void Pointer() {
-    if (in.mouseUsed) {
+    if (in.mouseUsed && !in.systemCursor) {
         kit::Image(in.mx, in.my, 26, 26, ui.pointer, theme::kCream);
     }
 }

@@ -422,6 +422,41 @@ void FBO_Init(void)
 
 /*
 ============
+FBO_ResizeScreen
+
+skaar: after R_ResizeScreenImages, the screen-sized FBOs take their images' new size
+============
+*/
+static void FBO_SetSize( FBO_t *fbo, const image_t *image )
+{
+	if ( fbo && image )
+	{
+		fbo->width = image->width;
+		fbo->height = image->height;
+	}
+}
+
+void FBO_ResizeScreen( void )
+{
+	FBO_SetSize( tr.renderFbo, tr.renderDepthImage );
+	// with MSAA the render FBO has its own renderbuffers; FBO_CreateBuffer re-sizes existing ones
+	if ( tr.renderFbo && tr.renderFbo->colorBuffers[0] )
+	{
+		FBO_CreateBuffer( tr.renderFbo, tr.renderFbo->colorFormat, 0, r_ext_framebuffer_multisample->integer );
+		FBO_CreateBuffer( tr.renderFbo, tr.renderFbo->depthFormat, 0, r_ext_framebuffer_multisample->integer );
+	}
+	FBO_SetSize( tr.msaaResolveFbo, tr.renderDepthImage );
+	FBO_SetSize( tr.screenScratchFbo, tr.screenScratchImage );
+	FBO_SetSize( tr.sunRaysFbo, tr.renderDepthImage );
+	FBO_SetSize( tr.screenShadowFbo, tr.screenShadowImage );
+	FBO_SetSize( tr.quarterFbo[0], tr.quarterImage[0] );
+	FBO_SetSize( tr.quarterFbo[1], tr.quarterImage[1] );
+	FBO_SetSize( tr.hdrDepthFbo, tr.hdrDepthImage );
+	FBO_SetSize( tr.screenSsaoFbo, tr.screenSsaoImage );
+}
+
+/*
+============
 FBO_Shutdown
 ============
 */

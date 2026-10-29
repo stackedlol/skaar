@@ -35,6 +35,7 @@ void SyncRuleset() {
 namespace {
 
 void RegisterCvars() {
+    trap::CvarRegister(&cvars.vidSize, "r_vidSize", "", CVAR_ROM);
     trap::CvarRegister(&cvars.fov, "cg_fov", "103", CVAR_ARCHIVE);
     trap::CvarRegister(&cvars.drawHud, "cg_drawHud", "1", CVAR_ARCHIVE);
     trap::CvarRegister(&cvars.drawCrosshair, "cg_drawCrosshair", "1", CVAR_ARCHIVE);
@@ -51,6 +52,13 @@ void RegisterCvars() {
 }
 
 void UpdateCvars() {
+    // window resized or fullscreen toggled: no vid_restart, just the new size
+    const int vidSizeCount = cvars.vidSize.modificationCount;
+    trap::CvarUpdate(&cvars.vidSize);
+    if (cvars.vidSize.modificationCount != vidSizeCount) {
+        trap::GetGlconfig(&cg.glconfig);
+        skaar::ui::Resize(cg.glconfig.vidWidth, cg.glconfig.vidHeight);
+    }
     for (vmCvar_t* c : {&cvars.fov, &cvars.drawHud, &cvars.drawCrosshair, &cvars.crosshairSize, &cvars.crosshairGap,
                         &cvars.drawSpeed, &cvars.errorDecay, &cvars.noPredict, &cvars.showMiss, &cvars.pmoveFixed,
                         &cvars.pmoveMsec}) {

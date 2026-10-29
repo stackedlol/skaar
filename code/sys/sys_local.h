@@ -57,6 +57,12 @@ char *Sys_BinaryPathRelative( const char *relative );
 
 #ifdef __APPLE__
 char *Sys_StripAppBundle( char *pwd );
+#ifndef DEDICATED
+struct SDL_Window;
+void Sys_OSX_InitApp( void );	// sys_osx_window.m
+void Sys_OSX_InitWindow( struct SDL_Window *window );
+void Sys_OSX_SetFullscreen( qboolean fullscreen );
+#endif
 #endif
 
 void Sys_GLimpSafeInit( void );

@@ -29,6 +29,15 @@ Leaving out `CMAKE_OSX_ARCHITECTURES` builds universal arm64+x86_64 binaries (fo
 | `base/{cgame,qagame,ui}.dylib` | native game modules |
 | `base/*` symlinks | point at `data/base/*` (see `cmake/skaar/data.cmake`) |
 
+## Window
+Every launch starts windowed at 854×480 points, centered, resizable (`r_mode -1`). Cmd+Ctrl+F, Cmd+Enter,
+Alt+Enter, the green title bar button and Settings toggle fullscreen, which on macOS is a borderless window
+over the display with the menu bar and Dock hidden (no display mode change, no fullscreen Space), so Cmd+Tab
+is instant and brings the other app's menu bar and Dock back. Resizing and toggling
+never `vid_restart`: the renderer resizes its render targets in place.
+In a window, menus use the normal macOS cursor and leave the mouse free; the mouse is only captured while
+playing (Escape or Cmd+Tab frees it). Fullscreen menus keep the captured mouse and the game's own pointer.
+
 ## Run by hand
 ```sh
 B=build-fast/RelWithDebInfo
@@ -46,3 +55,5 @@ $B/skaar.app/Contents/MacOS/skaar +set fs_basepath $PWD/$B +set fs_homepath $PWD
 | `BUILD_MISSIONPACK` | (always) | OFF | Team Arena isn't used |
 | `vm_game/vm_cgame/vm_ui` default | 2 (QVM) | 0 (native) | Same as above |
 | `CMAKE_OSX_ARCHITECTURES` | forced universal | overridable | Faster arm64 dev builds |
+| `USE_CODEC_VORBIS`, `USE_CODEC_OPUS` | ON | OFF | No Ogg/Opus assets; `.wav` only |
+| `USE_VOIP`, `USE_MUMBLE` | ON | OFF | Opened the microphone at every launch; no voice chat yet |

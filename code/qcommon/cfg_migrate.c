@@ -18,7 +18,7 @@ This file is part of Skaar, a fork of ioquake3. GPLv2 or later.
 #include "q_shared.h"
 #include "qcommon.h"
 
-#define CFG_VERSION 1	// bump with every new batch of rows
+#define CFG_VERSION 3	// bump with every new batch of rows
 
 typedef struct {
 	int			version;	// rows run when upgrading from below this version
@@ -49,6 +49,14 @@ static const cfgCvarMigration_t cvarMigrations[] = {
 	{ 1, "vm_game", "2", "0" },
 	{ 1, "vm_cgame", "2", "0" },
 	{ 1, "vm_ui", "2", "0" },
+	// 2026-10-29: start in a centered, resizable 854x480 window; fullscreen is a toggle
+	{ 2, "r_mode", "-2", "-1" },
+	{ 2, "r_customwidth", "1600", "854" },
+	{ 2, "r_customheight", "900 1024", "480" },
+	{ 2, "r_allowResize", "0", "1" },
+	{ 2, "r_centerWindow", "0", "1" },
+	// 2026-10-29: no console-font toasts on screen by default, dev builds included
+	{ 3, "dev_toasts", "1", "0" },
 };
 
 #ifndef DEDICATED	// the dedicated server has no key bindings

@@ -65,6 +65,7 @@ struct State {
 };
 
 struct Cvars {
+    vmCvar_t vidSize;  // r_vidSize: changes when the window's drawable size does
     vmCvar_t fov, drawHud, drawCrosshair, crosshairSize, crosshairGap, drawSpeed, errorDecay, noPredict, showMiss,
         pmoveFixed, pmoveMsec;
 };

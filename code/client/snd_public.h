@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 
 void S_Init( void );
+void S_AL_WarmUp( void );
 void S_Shutdown( void );
 
 // if origin is NULL, the sound will be dynamically sourced from the entity

@@ -190,8 +190,18 @@ void KeyEvent(int key, bool down) {
 void MouseEvent(int dx, int dy) {
     in.mouseUsed = true;
     in.mouseMoved = true;
+    in.systemCursor = false;
     in.mx = std::fmin(std::fmax(0.0f, in.mx + dx / kit::Scale()), kit::Width());
     in.my = std::fmin(std::fmax(0.0f, in.my + dy / kit::Scale()), kit::Height());
+}
+
+// Windowed menus leave the mouse free: x, y is the system cursor in pixels
+void MousePosition(int x, int y) {
+    in.mouseUsed = true;
+    in.mouseMoved = true;
+    in.systemCursor = true;
+    in.mx = std::fmin(std::fmax(0.0f, x / kit::Scale()), kit::Width());
+    in.my = std::fmin(std::fmax(0.0f, y / kit::Scale()), kit::Height());
 }
 
 // ---- lifecycle -----------------------------------------------------------------
@@ -202,6 +212,7 @@ void Init() {
     ui = State{};
     in = Input{};
     trap::GetGlconfig(&ui.glconfig);
+    trap::CvarRegister(&ui.vidSize, "r_vidSize", "", CVAR_ROM);
     kit::Backend backend{};
     backend.registerShader = trap::R_RegisterShaderNoMip;  // scripts/skaar-ui.shader adds mipmaps
     backend.setColor = trap::R_SetColor;
@@ -231,6 +242,14 @@ void Init() {
 
 void Refresh(int realtime) {
     ui.realtime = realtime;
+    // window resized or fullscreen toggled: no vid_restart, just the new size
+    const int vidSizeCount = ui.vidSize.modificationCount;
+    trap::CvarUpdate(&ui.vidSize);
+    if (ui.vidSize.modificationCount != vidSizeCount) {
+        trap::GetGlconfig(&ui.glconfig);
+        kit::Resize(ui.glconfig.vidWidth, ui.glconfig.vidHeight);
+        in.mx = std::fmin(in.mx, kit::Width());
+    }
     if (!(trap::Key_GetCatcher() & KEYCATCH_UI) || ui.screen == Screen::kNone) {
         return;
     }
@@ -326,6 +345,9 @@ intptr_t Dispatch(int command, int arg0, int arg1) {
             return 0;
         case UI_MOUSE_EVENT:
             MouseEvent(arg0, arg1);
+            return 0;
+        case UI_MOUSE_POSITION:
+            MousePosition(arg0, arg1);
             return 0;
         case UI_REFRESH:
             Refresh(arg0);
