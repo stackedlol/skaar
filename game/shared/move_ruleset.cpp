@@ -166,10 +166,6 @@ int FindRuleset(std::string_view id) {
     return -1;
 }
 
-int RulesetCount() {
-    return static_cast<int>(Registry().size());
-}
-
 const Ruleset& RulesetAt(int index) {
     const std::vector<Ruleset>& all = Registry();
     if (index < 0 || index >= static_cast<int>(all.size())) {

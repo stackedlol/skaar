@@ -75,7 +75,6 @@ bool ParseRuleset(std::string_view id, std::string_view json, Ruleset& out, std:
 void ResetRulesets();
 int AddRuleset(const Ruleset& ruleset);  // replaces one with the same id, else appends; returns its index
 int FindRuleset(std::string_view id);    // -1 if unknown
-int RulesetCount();
 const Ruleset& RulesetAt(int index);     // out of range: vq3
 void SetRulesetAt(int index, const Ruleset& ruleset);  // grows the registry with vq3 copies if needed
 

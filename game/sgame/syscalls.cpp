@@ -26,7 +26,6 @@ void Error(const char* text) {
     std::abort();  // G_ERROR longjmps out of the module; never reached
 }
 
-int Milliseconds() { return static_cast<int>(g_syscall(G_MILLISECONDS)); }
 int Argc() { return static_cast<int>(g_syscall(G_ARGC)); }
 
 std::string Argv(int n) {
@@ -35,7 +34,6 @@ std::string Argv(int n) {
     return buf;
 }
 
-void SendConsoleCommand(int when, const char* text) { g_syscall(G_SEND_CONSOLE_COMMAND, when, text); }
 
 void CvarRegister(vmCvar_t* cvar, const char* name, const char* value, int flags) {
     g_syscall(G_CVAR_REGISTER, cvar, name, value, flags);
@@ -49,7 +47,6 @@ void LocateGameData(gentity_t* ents, int numEnts, int entSize, playerState_t* cl
     g_syscall(G_LOCATE_GAME_DATA, ents, numEnts, entSize, clients, clientSize);
 }
 
-void DropClient(int clientNum, const char* reason) { g_syscall(G_DROP_CLIENT, clientNum, reason); }
 void SendServerCommand(int clientNum, const char* text) { g_syscall(G_SEND_SERVER_COMMAND, clientNum, text); }
 void SetConfigstring(int num, const char* value) { g_syscall(G_SET_CONFIGSTRING, num, value); }
 

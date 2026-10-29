@@ -53,7 +53,6 @@ void AddCommand(const char* name) { g_syscall(CG_ADDCOMMAND, name); }
 void RemoveCommand(const char* name) { g_syscall(CG_REMOVECOMMAND, name); }
 void SendClientCommand(const char* text) { g_syscall(CG_SENDCLIENTCOMMAND, text); }
 void SendConsoleCommand(const char* text) { g_syscall(CG_SENDCONSOLECOMMAND, text); }
-void UpdateScreen() { g_syscall(CG_UPDATESCREEN); }
 
 bool FileRead(const char* path, std::string& out) {
     fileHandle_t f;
@@ -132,8 +131,6 @@ void SetUserCmdValue(int stateValue, float sensitivityScale) {
 }
 
 int Key_GetCatcher() { return static_cast<int>(g_syscall(CG_KEY_GETCATCHER)); }
-void Key_SetCatcher(int catcher) { g_syscall(CG_KEY_SETCATCHER, catcher); }
-bool Key_IsDown(int key) { return g_syscall(CG_KEY_ISDOWN, key) != 0; }
 
 sfxHandle_t S_RegisterSound(const char* name, bool compressed) {
     return static_cast<sfxHandle_t>(g_syscall(CG_S_REGISTERSOUND, name, compressed ? qtrue : qfalse));

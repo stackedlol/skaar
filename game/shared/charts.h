@@ -23,13 +23,9 @@ struct Rect {
 // Call after ui::Init with the same backend.
 void Init(const Backend& backend);
 
-// Straight line of `thickness` virtual units (at least one pixel).
-void Line(float x0, float y0, float x1, float y1, Color color, float thickness = 1.5f);
-
-// Square dot / filled disc / circle outline, centred, size in virtual units.
-void Dot(float x, float y, float size, Color color);
-// Many dots in one colour (x/y pairs): one colour change for the lot.
+// Square dots (x/y pairs), centred, size in virtual units: one colour change for the lot.
 void Dots(const std::vector<float>& xy, float size, Color color);
+// Filled disc / circle outline, centred, in virtual units.
 void Disc(float x, float y, float radius, Color color);
 void Ring(float x, float y, float radius, Color color, float thickness = 1.0f);
 

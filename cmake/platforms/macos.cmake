@@ -16,6 +16,8 @@ list(APPEND CLIENT_LIBRARIES "-framework IOKit")
 list(APPEND CLIENT_LIBRARIES "-weak_framework GameController")
 list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx_rawmouse.m)
 list(APPEND RENDERER_LIBRARIES "-framework OpenGL")
+# skaar: drop every function and datum nothing references from the binaries
+add_link_options(-Wl,-dead_strip)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
 # Universal by default; pass -DCMAKE_OSX_ARCHITECTURES=arm64 for faster dev builds
