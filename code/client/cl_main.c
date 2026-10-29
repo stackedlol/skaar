@@ -3548,6 +3548,10 @@ CL_Init
 void CL_Init( void ) {
 	Com_Printf( "----- Client Initialization -----\n" );
 
+#ifdef USE_OPENAL
+	S_AL_WarmUp();
+#endif
+
 	Con_Init ();
 
 	if(!com_fullyInitialized)

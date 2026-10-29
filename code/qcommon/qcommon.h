@@ -43,6 +43,7 @@ typedef struct {
 	int		bit;				// for bitwise reads and writes
 } msg_t;
 
+void MSG_StartHuffman (void);
 void MSG_Init (msg_t *buf, byte *data, int length);
 void MSG_InitOOB( msg_t *buf, byte *data, int length );
 void MSG_Clear (msg_t *buf);

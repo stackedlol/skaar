@@ -531,6 +531,10 @@ static void IN_InitJoystick( void )
 	gamepad = NULL;
 	memset(&stick_state, '\0', sizeof (stick_state));
 
+	// skaar: no joystick subsystem and device scan (~12 ms at startup) unless it's enabled
+	if( !in_joystick->integer )
+		return;
+
 	// SDL 2.0.4 requires SDL_INIT_JOYSTICK to be initialized separately from
 	// SDL_INIT_GAMECONTROLLER for SDL_JoystickOpen() to work correctly,
 	// despite https://wiki.libsdl.org/SDL_Init (retrieved 2016-08-16)
@@ -571,12 +575,6 @@ static void IN_InitJoystick( void )
 
 	// Update cvar on in_restart or controller add/remove.
 	Cvar_Set( "in_availableJoysticks", buf );
-
-	if( !in_joystick->integer ) {
-		Com_DPrintf( "Joystick is not active.\n" );
-		SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
-		return;
-	}
 
 	in_joystickNo = Cvar_Get( "in_joystickNo", "0", CVAR_ARCHIVE );
 	if( in_joystickNo->integer < 0 || in_joystickNo->integer >= total )

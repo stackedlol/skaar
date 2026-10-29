@@ -46,3 +46,5 @@ $B/skaar.app/Contents/MacOS/skaar +set fs_basepath $PWD/$B +set fs_homepath $PWD
 | `BUILD_MISSIONPACK` | (always) | OFF | Team Arena isn't used |
 | `vm_game/vm_cgame/vm_ui` default | 2 (QVM) | 0 (native) | Same as above |
 | `CMAKE_OSX_ARCHITECTURES` | forced universal | overridable | Faster arm64 dev builds |
+| `USE_CODEC_VORBIS`, `USE_CODEC_OPUS` | ON | OFF | No Ogg/Opus assets; `.wav` only |
+| `USE_VOIP`, `USE_MUMBLE` | ON | OFF | Opened the microphone at every launch; no voice chat yet |

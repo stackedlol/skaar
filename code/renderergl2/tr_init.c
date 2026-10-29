@@ -1610,13 +1610,15 @@ void RE_Shutdown( qboolean destroyWindow ) {
 			FBO_Shutdown();
 		R_DeleteTextures();
 		R_ShutdownVaos();
-		GLSL_ShutdownGPUShaders();
+		// skaar: a map load keeps the context, so it keeps the programs too
+		GLSL_ShutdownGPUShaders( !destroyWindow );
 	}
 
 	R_DoneFreeType();
 
 	// shut down platform specific OpenGL stuff
 	if ( destroyWindow ) {
+		GLSL_ReleaseKeptPrograms();
 		GLimp_Shutdown();
 
 		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
@@ -1642,6 +1644,8 @@ Touch all images to make sure they are resident
 */
 void RE_EndRegistration( void ) {
 	R_IssuePendingRenderCommands();
+	// skaar: a map never starts with GLSL programs left to compile
+	GLSL_CompileDeferredPrograms( 0 );
 	if (!ri.Sys_LowPhysicalMemory()) {
 		RB_ShowImages();
 	}

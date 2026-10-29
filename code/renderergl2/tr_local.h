@@ -725,6 +725,9 @@ typedef struct shaderProgram_s
 	uint32_t        attribs;	// vertex array attributes
 
 	// uniform parameters
+	qboolean		deferred;	// skaar: recorded, compiles on first use (tr_glsl.c)
+	int				deferredJob;
+
 	GLint uniforms[UNIFORM_COUNT];
 	short uniformBufferOffsets[UNIFORM_COUNT]; // max 32767/64=511 uniforms
 	char  *uniformBuffer;
@@ -2252,7 +2255,10 @@ GLSL
 */
 
 void GLSL_InitGPUShaders(void);
-void GLSL_ShutdownGPUShaders(void);
+void GLSL_ShutdownGPUShaders(qboolean keep);
+void GLSL_ReleaseKeptPrograms(void);
+void GLSL_SetFBufScale(void);
+void GLSL_CompileDeferredPrograms(int maxMsec);
 void GLSL_VertexAttribPointers(uint32_t attribBits);
 void GLSL_BindProgram(shaderProgram_t * program);
 

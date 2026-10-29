@@ -2689,6 +2689,8 @@ void Com_Init( char *commandLine ) {
 	// initialize the weak pseudo-random number generator for use later.
 	Com_InitRand();
 
+	MSG_StartHuffman();
+
 	// do this before anything else decides to push events
 	Com_InitPushEvent();
 
