@@ -560,6 +560,9 @@ void RE_EndFrame( int *frontEndMsec, int *backEndMsec ) {
 
 	R_InitNextFrame();
 
+	// skaar: idle frames (the menu) compile the remaining GLSL programs, ~one per frame
+	GLSL_CompileDeferredPrograms( 1 );
+
 	if ( frontEndMsec ) {
 		*frontEndMsec = tr.frontEndMsec;
 	}

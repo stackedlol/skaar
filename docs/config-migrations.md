@@ -29,3 +29,5 @@ Rows are cumulative: a v0 config runs every row, a v1 config only the v2+ rows.
 | Version | Date | Changes |
 |---|---|---|
 | 1 | 2026-10-22 | Reticle (colour f7e08a, size 4, gap 0); r_toneMap 0, r_autoExposure 0; neutral team names; vm_* native; old default window → fullscreen desktop; binds: r sk_restart, i sk_insights, 3/5/6/7 weapons, wheel weapprev/weapnext |
+| 2 | 2026-10-29 | Window: r_mode -2 → -1 at 854x480 (from 1600x900 / 1600x1024), r_allowResize 1, r_centerWindow 1. Not a migration but related: `r_fullscreen` is reset to 0 at every launch (`Com_Init`), fullscreen is a toggle |
+| 3 | 2026-10-29 | `dev_toasts` 1 → 0: toasts are opt-in in every build |

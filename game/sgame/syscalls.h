@@ -24,16 +24,13 @@ namespace sg::trap {
 
 void Print(const char* text);
 [[noreturn]] void Error(const char* text);
-int Milliseconds();
 int Argc();
 std::string Argv(int n);
-void SendConsoleCommand(int when, const char* text);
 void CvarRegister(vmCvar_t* cvar, const char* name, const char* value, int flags);
 void CvarUpdate(vmCvar_t* cvar);
 void CvarSet(const char* name, const char* value);
 int CvarInt(const char* name);
 void LocateGameData(gentity_t* ents, int numEnts, int entSize, playerState_t* clients, int clientSize);
-void DropClient(int clientNum, const char* reason);
 void SendServerCommand(int clientNum, const char* text);
 void SetConfigstring(int num, const char* value);
 std::string GetUserinfo(int clientNum);

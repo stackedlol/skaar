@@ -324,28 +324,6 @@ int	SCR_GetBigStringWidth( const char *str ) {
 
 //===============================================================================
 
-/*
-=================
-SCR_DrawDemoRecording
-=================
-*/
-void SCR_DrawDemoRecording( void ) {
-	char	string[1024];
-	int		pos;
-
-	if ( !clc.demorecording ) {
-		return;
-	}
-	if ( clc.spDemoRecording ) {
-		return;
-	}
-
-	pos = FS_FTell( clc.demofile );
-	sprintf( string, "RECORDING %s: %ik", clc.demoName, pos / 1024 );
-
-	SCR_DrawStringExt( 320 - strlen( string ) * 4, 20, 8, string, g_color_table[7], qtrue, qfalse );
-}
-
 
 #ifdef USE_VOIP
 /*
@@ -526,7 +504,6 @@ void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		case CA_ACTIVE:
 			// always supply STEREO_CENTER as vieworg offset is now done by the engine.
 			CL_CGameRendering(stereoFrame);
-			SCR_DrawDemoRecording();
 #ifdef USE_VOIP
 			SCR_DrawVoipMeter();
 #endif
@@ -570,6 +547,11 @@ void SCR_UpdateScreen( void ) {
 		Com_Error( ERR_FATAL, "SCR_UpdateScreen: recursively called" );
 	}
 	recursive = 1;
+
+	// skaar: window resized or fullscreen toggled: follow it without vid_restart
+	if ( cls.rendererStarted && re.ResizeVideo( &cls.glconfig ) ) {
+		CL_VideoResized();
+	}
 
 	// If there is no VM, there are also no rendering commands issued. Stop the renderer in
 	// that case.

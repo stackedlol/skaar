@@ -14,6 +14,8 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>@MACOS_APP_BUNDLE_NAME@</string>
+	<key>CFBundleDisplayName</key>
+	<string>@MACOS_APP_BUNDLE_NAME@</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -28,6 +30,8 @@
 	<string>@MACOS_APP_DEPLOYMENT_TARGET@</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.games</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 
 	@MACOS_APP_PLIST_URL_TYPES@
 </dict>

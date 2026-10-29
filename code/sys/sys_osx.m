@@ -32,6 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "sys_local.h"
 
 #import <Carbon/Carbon.h>
+#include <sys/stat.h>
 #import <Cocoa/Cocoa.h>
 
 /*
@@ -97,11 +98,17 @@ Sys_StripAppBundle
 Discovers if passed dir is suffixed with the directory structure of a Mac OS X
 .app bundle. If it is, the .app directory structure is stripped off the end and
 the result is returned. If not, dir is returned untouched.
+
+skaar: a self-contained Skaar.app (scripts/package-app.sh) carries its game
+data in Contents/Resources/<BASEGAME>, so that is the base path then. Its game
+modules sit in Contents/MacOS/<BASEGAME>, found through fs_apppath.
 =================
 */
 char *Sys_StripAppBundle( char *dir )
 {
 	static char cwd[MAX_OSPATH];
+	char resources[MAX_OSPATH];
+	struct stat st;
 
 	Q_strncpyz(cwd, dir, sizeof(cwd));
 	if(strcmp(Sys_Basename(cwd), "MacOS"))
@@ -109,6 +116,12 @@ char *Sys_StripAppBundle( char *dir )
 	Q_strncpyz(cwd, Sys_Dirname(cwd), sizeof(cwd));
 	if(strcmp(Sys_Basename(cwd), "Contents"))
 		return dir;
+	Com_sprintf(resources, sizeof(resources), "%s/Resources", cwd);
+	if(stat(va("%s/" BASEGAME, resources), &st) == 0 && S_ISDIR(st.st_mode))
+	{
+		Q_strncpyz(cwd, resources, sizeof(cwd));
+		return cwd;
+	}
 	Q_strncpyz(cwd, Sys_Dirname(cwd), sizeof(cwd));
 	if(!strstr(Sys_Basename(cwd), ".app"))
 		return dir;

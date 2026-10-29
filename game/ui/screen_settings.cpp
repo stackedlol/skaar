@@ -211,14 +211,12 @@ void DrawGame(float top) {
 void DrawVideo(float top) {
     const float m = theme::kMargin;
     float y = top;
-    if (ToggleRow(y, "Fullscreen", "r_fullscreen", "NEEDS APPLY")) {
-        // fullscreen at the desktop resolution; windowed at the last custom size
-        trap::CvarSet("r_mode", trap::CvarValue("r_fullscreen") != 0 ? "-2" : "-1");
-    }
+    // both apply instantly, no video restart
+    ToggleRow(y, "Fullscreen", "r_fullscreen", "CMD+CTRL+F");
     y += kRowStep;
     ToggleRow(y, "Retina resolution", "r_allowHighDPI", "NEEDS APPLY");
     y += kRowStep;
-    ToggleRow(y, "Vertical sync", "r_swapInterval", "NEEDS APPLY");
+    ToggleRow(y, "Vertical sync", "r_swapInterval");
     y += kRowStep;
     ChoiceRow(y, "Frame rate cap", "com_maxfps",
               {{"0", "Uncapped"}, {"144", "144"}, {"240", "240"}, {"360", "360"}, {"500", "500"}, {"1000", "1000"}});

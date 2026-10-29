@@ -839,6 +839,9 @@ int main( int argc, char **argv )
 
 		Sys_Exit( 1 );
 	}
+#ifdef __APPLE__
+	Sys_OSX_InitApp( );
+#endif
 #endif
 
 	Sys_PlatformInit( );

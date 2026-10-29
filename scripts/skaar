@@ -4,6 +4,7 @@
 #   skaar dev          the auto rebuild loop (scripts/dev-watch.sh)
 #   skaar map <name>   build if needed, then play straight into a map
 #   skaar build [fast|safe]
+#   skaar app [dir]    build a self-contained Skaar.app (default: dist/)
 #   skaar update       pull the latest code, then rebuild
 #   skaar smoke        pre-commit smoke test
 #   skaar watch        filtered live log of the running game
@@ -212,6 +213,11 @@ case "$cmd" in
         build_step "${1:-fast}"
         echo
         ;;
+    app)
+        intro app
+        toolchain
+        exec "$REPO/scripts/package-app.sh" "$@"
+        ;;
     update)
         intro update
         git -C "$REPO" pull --ff-only || { bad update "git pull failed (local changes?)"; exit 1; }
@@ -234,7 +240,7 @@ case "$cmd" in
         cat "$f"
         ;;
     -h|--help|help)
-        sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
         ;;
     *)
         echo "skaar: unknown command '$cmd' (try: skaar help)" >&2

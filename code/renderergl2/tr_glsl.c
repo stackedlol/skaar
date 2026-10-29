@@ -382,10 +382,17 @@ static void GLSL_GetShaderHeader( GLenum shaderType, const GLchar *extra, char *
 								AGEN_LIGHTING_SPECULAR,
 								AGEN_PORTAL));
 
-	fbufWidthScale = 1.0f / ((float)glConfig.vidWidth);
-	fbufHeightScale = 1.0f / ((float)glConfig.vidHeight);
-	Q_strcat(dest, size,
-			 va("#ifndef r_FBufScale\n#define r_FBufScale vec2(%f, %f)\n#endif\n", fbufWidthScale, fbufHeightScale));
+	// skaar: a uniform, so a window resize doesn't need new programs (GLSL_SetFBufScale).
+	// OpenGL ES keeps the constant: its stages can't share an unqualified uniform.
+	if (qglesMajorVersion)
+	{
+		fbufWidthScale = 1.0f / ((float)glConfig.vidWidth);
+		fbufHeightScale = 1.0f / ((float)glConfig.vidHeight);
+		Q_strcat(dest, size,
+				 va("#ifndef r_FBufScale\n#define r_FBufScale vec2(%f, %f)\n#endif\n", fbufWidthScale, fbufHeightScale));
+	}
+	else
+		Q_strcat(dest, size, "uniform vec2 r_FBufScale;\n");
 
 	if (r_pbr->integer)
 		Q_strcat(dest, size, "#define USE_PBR\n");
@@ -621,7 +628,7 @@ static int GLSL_InitGPUShader2(shaderProgram_t * program, const char *name, int 
 	return 1;
 }
 
-static int GLSL_InitGPUShader(shaderProgram_t * program, const char *name,
+static int GLSL_BuildGPUShader(shaderProgram_t * program, const char *name,
 	int attribs, qboolean fragmentShader, const GLchar *extra, qboolean addHeader,
 	const char *fallback_vp, const char *fallback_fp)
 {
@@ -673,11 +680,121 @@ static int GLSL_InitGPUShader(shaderProgram_t * program, const char *name,
 	return result;
 }
 
+// skaar: tr's shader programs, genericShader through greyscaleShader, are one contiguous run of shaderProgram_t
+#define GLSL_PROGRAMS_OFS	offsetof(trGlobals_t, genericShader)
+#define GLSL_PROGRAMS_SIZE	(offsetof(trGlobals_t, greyscaleShader) + sizeof(shaderProgram_t) - GLSL_PROGRAMS_OFS)
+#define GLSL_NUM_PROGRAMS	((int)(GLSL_PROGRAMS_SIZE / sizeof(shaderProgram_t)))
+
+/*
+skaar: deferred compilation. Compiling every program at startup took ~300 ms
+of the ~700 ms launch. GLSL_InitGPUShaders records each program (sources,
+sampler units) instead; a program compiles on first use, idle menu frames
+compile the rest one at a time, and RE_EndRegistration compiles whatever is
+left, so a map never starts with programs pending. A compile thread with a
+shared context doesn't help on macOS: Apple's GL holds the share group lock
+while it compiles, which stalls the main thread's GL calls just the same.
+*/
+#define MAX_DEFERRED_INTS 16
+
+typedef struct {
+	shaderProgram_t	*program;
+	char			name[MAX_QPATH];
+	int				attribs;
+	qboolean		fragmentShader, addHeader, hasExtra;
+	char			extra[1024];
+	const char		*fallback_vp, *fallback_fp;
+	int				numInts;
+	int				intUniform[MAX_DEFERRED_INTS];
+	GLint			intValue[MAX_DEFERRED_INTS];
+} glslDeferred_t;
+
+static glslDeferred_t	glslDeferred[GLSL_NUM_PROGRAMS];
+static int				glslNumDeferred, glslNextDeferred;
+static qboolean			glslRecording;	// inside GLSL_InitGPUShaders
+
+static void GLSL_SetFBufScaleFor(shaderProgram_t *program);
+void GLSL_InitUniforms(shaderProgram_t *program);
+void GLSL_FinishGPUShader(shaderProgram_t *program);
+
+static int GLSL_InitGPUShader(shaderProgram_t * program, const char *name,
+	int attribs, qboolean fragmentShader, const GLchar *extra, qboolean addHeader,
+	const char *fallback_vp, const char *fallback_fp)
+{
+	glslDeferred_t *job;
+
+	if (!glslRecording || glslNumDeferred == GLSL_NUM_PROGRAMS)
+		return GLSL_BuildGPUShader(program, name, attribs, fragmentShader, extra, addHeader, fallback_vp, fallback_fp);
+
+	job = &glslDeferred[glslNumDeferred];
+	Com_Memset(job, 0, sizeof(*job));
+	job->program = program;
+	Q_strncpyz(job->name, name, sizeof(job->name));
+	job->attribs = attribs;
+	job->fragmentShader = fragmentShader;
+	job->addHeader = addHeader;
+	job->hasExtra = extra != NULL;
+	if (extra)
+		Q_strncpyz(job->extra, extra, sizeof(job->extra));
+	job->fallback_vp = fallback_vp;
+	job->fallback_fp = fallback_fp;
+
+	Q_strncpyz(program->name, name, sizeof(program->name));
+	program->deferred = qtrue;
+	program->deferredJob = glslNumDeferred++;
+	return 1;
+}
+
+static void GLSL_CompileDeferred(shaderProgram_t *program)
+{
+	const glslDeferred_t *job = &glslDeferred[program->deferredJob];
+	int i;
+
+	program->deferred = qfalse;
+	if (!GLSL_BuildGPUShader(program, job->name, job->attribs, job->fragmentShader, job->hasExtra ? job->extra : NULL,
+		job->addHeader, job->fallback_vp, job->fallback_fp))
+	{
+		ri.Error(ERR_FATAL, "Could not load %s shader!", job->name);
+	}
+
+	GLSL_InitUniforms(program);
+	for (i = 0; i < job->numInts; i++)
+		GLSL_SetUniformInt(program, job->intUniform[i], job->intValue[i]);
+	GLSL_FinishGPUShader(program);
+	GLSL_SetFBufScaleFor(program);
+}
+
+// Compile on first use
+#define GLSL_READY(program) if ((program)->deferred) GLSL_CompileDeferred(program)
+
+/*
+====================
+GLSL_CompileDeferredPrograms
+
+skaar: compile pending programs for up to maxMsec (at least one), or all of them with 0
+====================
+*/
+void GLSL_CompileDeferredPrograms(int maxMsec)
+{
+	int start = ri.Milliseconds();
+
+	while (glslNextDeferred < glslNumDeferred)
+	{
+		shaderProgram_t *program = glslDeferred[glslNextDeferred++].program;
+
+		GLSL_READY(program);
+		if (maxMsec && ri.Milliseconds() - start >= maxMsec)
+			break;
+	}
+}
+
 void GLSL_InitUniforms(shaderProgram_t *program)
 {
 	int i, size;
 
 	GLint *uniforms = program->uniforms;
+
+	if (program->deferred)
+		return;	// at compile time
 
 	size = 0;
 	for (i = 0; i < UNIFORM_COUNT; i++)
@@ -725,14 +842,32 @@ void GLSL_InitUniforms(shaderProgram_t *program)
 
 void GLSL_FinishGPUShader(shaderProgram_t *program)
 {
+	if (program->deferred)
+		return;
+
 	GLSL_ShowProgramUniforms(program->program);
 	GL_CheckErrors();
 }
 
 void GLSL_SetUniformInt(shaderProgram_t *program, int uniformNum, GLint value)
 {
-	GLint *uniforms = program->uniforms;
-	GLint *compare = (GLint *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
+	GLint *uniforms, *compare;
+
+	// skaar: a deferred program's sampler units are set when it compiles
+	if (program->deferred && glslRecording)
+	{
+		glslDeferred_t *job = &glslDeferred[program->deferredJob];
+
+		if (job->numInts == MAX_DEFERRED_INTS)
+			ri.Error(ERR_FATAL, "GLSL_SetUniformInt: too many deferred values for %s", program->name);
+		job->intUniform[job->numInts] = uniformNum;
+		job->intValue[job->numInts++] = value;
+		return;
+	}
+	GLSL_READY(program);
+
+	uniforms = program->uniforms;
+	compare = (GLint *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
 	if (uniforms[uniformNum] == -1)
 		return;
@@ -755,6 +890,8 @@ void GLSL_SetUniformInt(shaderProgram_t *program, int uniformNum, GLint value)
 
 void GLSL_SetUniformFloat(shaderProgram_t *program, int uniformNum, GLfloat value)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	GLfloat *compare = (GLfloat *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -779,6 +916,8 @@ void GLSL_SetUniformFloat(shaderProgram_t *program, int uniformNum, GLfloat valu
 
 void GLSL_SetUniformVec2(shaderProgram_t *program, int uniformNum, const vec2_t v)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -804,6 +943,8 @@ void GLSL_SetUniformVec2(shaderProgram_t *program, int uniformNum, const vec2_t 
 
 void GLSL_SetUniformVec3(shaderProgram_t *program, int uniformNum, const vec3_t v)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -828,6 +969,8 @@ void GLSL_SetUniformVec3(shaderProgram_t *program, int uniformNum, const vec3_t 
 
 void GLSL_SetUniformVec4(shaderProgram_t *program, int uniformNum, const vec4_t v)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -852,6 +995,8 @@ void GLSL_SetUniformVec4(shaderProgram_t *program, int uniformNum, const vec4_t 
 
 void GLSL_SetUniformFloat5(shaderProgram_t *program, int uniformNum, const vec5_t v)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -876,6 +1021,8 @@ void GLSL_SetUniformFloat5(shaderProgram_t *program, int uniformNum, const vec5_
 
 void GLSL_SetUniformMat4(shaderProgram_t *program, int uniformNum, const mat4_t matrix)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -900,6 +1047,8 @@ void GLSL_SetUniformMat4(shaderProgram_t *program, int uniformNum, const mat4_t 
 
 void GLSL_SetUniformMat4BoneMatrix(shaderProgram_t *program, int uniformNum, /*const*/ mat4_t *matrix, int numMatricies)
 {
+	GLSL_READY(program);
+
 	GLint *uniforms = program->uniforms;
 	vec_t *compare = (float *)(program->uniformBuffer + program->uniformBufferOffsets[uniformNum]);
 
@@ -957,6 +1106,65 @@ void GLSL_DeleteGPUShader(shaderProgram_t *program)
 	}
 }
 
+/*
+skaar: a map load restarts the renderer without destroying the GL context;
+the programs are kept across it instead of being recompiled (~300 ms),
+unless a setting they are compiled from changed.
+*/
+
+static struct {
+	qboolean	valid;
+	char		key[MAX_STRING_CHARS];
+	byte		programs[GLSL_PROGRAMS_SIZE];
+} glslKept;
+
+static shaderProgram_t *GLSL_Programs(void)
+{
+	return (shaderProgram_t *)((byte *)&tr + GLSL_PROGRAMS_OFS);
+}
+
+// Everything the program set and the shader headers are built from
+static void GLSL_ProgramsKey(char *key, int size)
+{
+	Com_sprintf(key, size, "%d.%d %d %d %d %d|%d %d %d %d %d %d %d %d %d %d %d %d %d %d|%g %g %g %g %d",
+		glRefConfig.glslMajorVersion, glRefConfig.glslMinorVersion, glRefConfig.glslMaxAnimatedBones,
+		glRefConfig.standardDerivatives, glRefConfig.shadowSamplers, glRefConfig.swizzleNormalmap,
+		r_sunlightMode->integer, r_parallaxMapping->integer, r_normalMapping->integer, r_cubeMapping->integer,
+		r_specularMapping->integer, r_shadowFilter->integer, r_pbr->integer, r_parallaxMapShadows->integer,
+		r_glossType->integer, r_dlightMode->integer, r_deluxeMapping->integer, r_cubemapSize->integer,
+		r_shadowCascadeZFar->integer, r_externalGLSL->integer,
+		r_deluxeSpecular->value, r_shadowMapSize->value, r_shadowCascadeZFar->value, r_parallaxMapOffset->value,
+		qglesMajorVersion);
+}
+
+/*
+====================
+GLSL_SetFBufScale
+
+skaar: r_FBufScale (1 / framebuffer size) for every program that uses it; after linking and after a resize
+====================
+*/
+static void GLSL_SetFBufScaleFor(shaderProgram_t *program)
+{
+	GLint location;
+
+	if (qglesMajorVersion || !program->program)
+		return;
+
+	location = qglGetUniformLocation(program->program, "r_FBufScale");
+	if (location != -1)
+		qglProgramUniform2fEXT(program->program, location, 1.0f / glConfig.vidWidth, 1.0f / glConfig.vidHeight);
+}
+
+void GLSL_SetFBufScale(void)
+{
+	shaderProgram_t *programs = GLSL_Programs();
+	int i;
+
+	for (i = 0; i < GLSL_NUM_PROGRAMS; i++)
+		GLSL_SetFBufScaleFor(&programs[i]);
+}
+
 void GLSL_InitGPUShaders(void)
 {
 	int             startTime, endTime;
@@ -979,6 +1187,28 @@ void GLSL_InitGPUShaders(void)
 		ri.Printf(PRINT_ALL, "Using CPU vertex animation\n");
 		glRefConfig.gpuVertexAnimation = qfalse;
 	}
+
+	{
+		char key[MAX_STRING_CHARS];
+
+		GLSL_ProgramsKey(key, sizeof(key));
+		if (glslKept.valid)
+		{
+			Com_Memcpy(GLSL_Programs(), glslKept.programs, GLSL_PROGRAMS_SIZE);
+			glslKept.valid = qfalse;
+			if (!r_externalGLSL->integer && !strcmp(key, glslKept.key))
+			{
+				GLSL_SetFBufScale();
+				ri.Printf(PRINT_ALL, "kept the GLSL programs from before the restart\n");
+				return;
+			}
+			GLSL_ShutdownGPUShaders(qfalse);
+		}
+		Q_strncpyz(glslKept.key, key, sizeof(glslKept.key));
+	}
+
+	glslNumDeferred = glslNextDeferred = 0;
+	glslRecording = qtrue;
 
 	for (i = 0; i < GENERICDEF_COUNT; i++)
 	{	
@@ -1546,15 +1776,19 @@ void GLSL_InitGPUShaders(void)
 #endif
 
 
+	glslRecording = qfalse;
+	GLSL_SetFBufScale();
+
 	endTime = ri.Milliseconds();
 
-	ri.Printf(PRINT_ALL, "loaded %i GLSL shaders (%i gen %i light %i etc) in %5.2f seconds\n", 
+	ri.Printf(PRINT_ALL, "prepared %i GLSL shaders (%i gen %i light %i etc) in %5.2f seconds, %i compile on demand\n",
 		numGenShaders + numLightShaders + numEtcShaders, numGenShaders, numLightShaders, 
-		numEtcShaders, (endTime - startTime) / 1000.0);
+		numEtcShaders, (endTime - startTime) / 1000.0, glslNumDeferred);
 }
 
-void GLSL_ShutdownGPUShaders(void)
+void GLSL_ShutdownGPUShaders(qboolean keep)
 {
+	shaderProgram_t *programs = GLSL_Programs();
 	int i;
 
 	ri.Printf(PRINT_ALL, "------- GLSL_ShutdownGPUShaders -------\n");
@@ -1564,43 +1798,45 @@ void GLSL_ShutdownGPUShaders(void)
 
 	GL_BindNullProgram();
 
-	for ( i = 0; i < GENERICDEF_COUNT; i++)
-		GLSL_DeleteGPUShader(&tr.genericShader[i]);
+	if (keep)
+	{
+		GLSL_CompileDeferredPrograms(0);
+		GL_BindNullProgram();
+		Com_Memcpy(glslKept.programs, programs, GLSL_PROGRAMS_SIZE);
+		glslKept.valid = qtrue;
+		return;
+	}
 
-	GLSL_DeleteGPUShader(&tr.textureColorShader);
+	for (i = 0; i < GLSL_NUM_PROGRAMS; i++)
+		GLSL_DeleteGPUShader(&programs[i]);
+}
 
-	for ( i = 0; i < FOGDEF_COUNT; i++)
-		GLSL_DeleteGPUShader(&tr.fogShader[i]);
+/*
+====================
+GLSL_ReleaseKeptPrograms
 
-	for ( i = 0; i < DLIGHTDEF_COUNT; i++)
-		GLSL_DeleteGPUShader(&tr.dlightShader[i]);
+skaar: the GL context is going away; delete programs still kept from an earlier restart
+====================
+*/
+void GLSL_ReleaseKeptPrograms(void)
+{
+	if (!glslKept.valid)
+		return;
 
-	for ( i = 0; i < LIGHTDEF_COUNT; i++)
-		GLSL_DeleteGPUShader(&tr.lightallShader[i]);
-
-	for ( i = 0; i < SHADOWMAPDEF_COUNT; i++)
-		GLSL_DeleteGPUShader(&tr.shadowmapShader[i]);
-
-	GLSL_DeleteGPUShader(&tr.pshadowShader);
-	GLSL_DeleteGPUShader(&tr.down4xShader);
-	GLSL_DeleteGPUShader(&tr.bokehShader);
-	GLSL_DeleteGPUShader(&tr.tonemapShader);
-
-	for ( i = 0; i < 2; i++)
-		GLSL_DeleteGPUShader(&tr.calclevels4xShader[i]);
-
-	GLSL_DeleteGPUShader(&tr.shadowmaskShader);
-	GLSL_DeleteGPUShader(&tr.ssaoShader);
-
-	for ( i = 0; i < 4; i++)
-		GLSL_DeleteGPUShader(&tr.depthBlurShader[i]);
+	Com_Memcpy(GLSL_Programs(), glslKept.programs, GLSL_PROGRAMS_SIZE);
+	glslKept.valid = qfalse;
+	GLSL_ShutdownGPUShaders(qfalse);
 }
 
 
 void GLSL_BindProgram(shaderProgram_t * program)
 {
-	GLuint programObject = program ? program->program : 0;
+	GLuint programObject;
 	char *name = program ? program->name : "NULL";
+
+	if (program)
+		GLSL_READY(program);
+	programObject = program ? program->program : 0;
 
 	if(r_logFile->integer)
 	{

@@ -25,10 +25,12 @@ option(USE_RENDERER_DLOPEN "Dynamically load the renderer(s)" ON)
 option(USE_OPENAL "OpenAL audio" ON)
 option(USE_OPENAL_DLOPEN "Dynamically load OpenAL" ON)
 option(USE_HTTP "HTTP download support" ON)
-option(USE_CODEC_VORBIS "Ogg Vorbis support" ON)
-option(USE_CODEC_OPUS "Ogg Opus support" ON)
-option(USE_VOIP "Voice chat" ON)
-option(USE_MUMBLE "Mumble support" ON)
+# skaar: off until something needs them (no .ogg/.opus data, no multiplayer yet).
+# VoIP would open the microphone at every launch (a permission prompt in the .app).
+option(USE_CODEC_VORBIS "Ogg Vorbis support" OFF)
+option(USE_CODEC_OPUS "Ogg Opus support" OFF)
+option(USE_VOIP "Voice chat (needs USE_CODEC_OPUS)" OFF)
+option(USE_MUMBLE "Mumble support" OFF)
 option(USE_FREETYPE "Freetype font rendering" OFF)
 
 option(USE_INTERNAL_LIBS "Use internally packaged libraries" ON)

@@ -1245,7 +1245,9 @@ void CL_KeyDownEvent( int key, unsigned time )
 	if( keys[key].repeats == 1 )
 		anykeydown++;
 
-	if( keys[K_ALT].down && key == K_ENTER )
+	// skaar: Alt+Enter, Cmd+Enter and Cmd+Ctrl+F (the macOS shortcut) toggle fullscreen
+	if( ( ( keys[K_ALT].down || keys[K_COMMAND].down ) && key == K_ENTER ) ||
+		( keys[K_COMMAND].down && keys[K_CTRL].down && key == 'f' ) )
 	{
 		// don't repeat fullscreen toggle when keys are held down
 		if ( keys[K_ENTER].repeats > 1 ) {

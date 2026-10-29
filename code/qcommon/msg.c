@@ -22,9 +22,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 
+#ifdef __APPLE__
+#include <pthread.h>
+#endif
+
 static huffman_t		msgHuff;
 
-static qboolean			msgInit = qfalse;
+static qboolean			msgInit = qfalse;	// msgHuff is built (main thread only)
+#ifdef __APPLE__
+static pthread_t		msgHuffThread;
+static qboolean			msgHuffThreadRunning;
+#endif
 
 int pcount[256];
 
@@ -39,21 +47,15 @@ Handles byte ordering and avoids alignment errors
 
 int oldsize = 0;
 
-void MSG_initHuffman( void );
+static void MSG_WaitHuffman( void );
 
 void MSG_Init( msg_t *buf, byte *data, int length ) {
-	if (!msgInit) {
-		MSG_initHuffman();
-	}
 	Com_Memset (buf, 0, sizeof(*buf));
 	buf->data = data;
 	buf->maxsize = length;
 }
 
 void MSG_InitOOB( msg_t *buf, byte *data, int length ) {
-	if (!msgInit) {
-		MSG_initHuffman();
-	}
 	Com_Memset (buf, 0, sizeof(*buf));
 	buf->data = data;
 	buf->maxsize = length;
@@ -158,6 +160,9 @@ void MSG_WriteBits( msg_t *msg, int value, int bits ) {
 			bits = bits - nbits;
 		}
 		if ( bits ) {
+			if ( !msgInit ) {
+				MSG_WaitHuffman();
+			}
 			for( i = 0; i < bits; i += 8 ) {
 				Huff_offsetTransmit( &msgHuff.compressor, (value & 0xff), msg->data, &msg->bit, msg->maxsize << 3 );
 				value = (value >> 8);
@@ -235,10 +240,11 @@ int MSG_ReadBits( msg_t *msg, int bits ) {
 			bits = bits - nbits;
 		}
 		if (bits) {
-//			fp = fopen("c:\\netchan.bin", "a");
+			if ( !msgInit ) {
+				MSG_WaitHuffman();
+			}
 			for(i=0;i<bits;i+=8) {
 				Huff_offsetReceive (msgHuff.decompressor.tree, &get, msg->data, &msg->bit, msg->cursize<<3);
-//				fwrite(&get, 1, 1, fp);
 				value = (unsigned int)value | ((unsigned int)get<<(i+nbits));
 
 				if (msg->bit > msg->cursize<<3) {
@@ -1666,10 +1672,9 @@ int msg_hData[256] = {
 13504,			// 255
 };
 
-void MSG_initHuffman( void ) {
+static void MSG_BuildHuffman( void ) {
 	int i,j;
 
-	msgInit = qtrue;
 	Huff_Init(&msgHuff);
 	for(i=0;i<256;i++) {
 		for (j=0;j<msg_hData[i];j++) {
@@ -1679,39 +1684,35 @@ void MSG_initHuffman( void ) {
 	}
 }
 
-/*
-void MSG_NUinitHuffman() {
-	byte	*data;
-	int		size, i, ch;
-	int		array[256];
-
-	msgInit = qtrue;
-
-	Huff_Init(&msgHuff);
-	// load it in
-	size = FS_ReadFile( "netchan/netchan.bin", (void **)&data );
-
-	for(i=0;i<256;i++) {
-		array[i] = 0;
-	}
-	for(i=0;i<size;i++) {
-		ch = data[i];
-		Huff_addRef(&msgHuff.compressor,	ch);			// Do update
-		Huff_addRef(&msgHuff.decompressor,	ch);			// Do update
-		array[ch]++;
-	}
-	Com_Printf("msg_hData {\n");
-	for(i=0;i<256;i++) {
-		if (array[i] == 0) {
-			Huff_addRef(&msgHuff.compressor,	i);			// Do update
-			Huff_addRef(&msgHuff.decompressor,	i);			// Do update
-		}
-		Com_Printf("%d,			// %d\n", array[i], i);
-	}
-	Com_Printf("};\n");
-	FS_FreeFile( data );
-	Cbuf_AddText( "condump dump.txt\n" );
+#ifdef __APPLE__
+static void *MSG_HuffmanThread( void *arg ) {
+	MSG_BuildHuffman();
+	return NULL;
 }
+#endif
+
+/*
+skaar: building the tables is ~50 ms of single-step tree updates, so Com_Init
+starts it on a worker and only bitstream reads and writes wait for it. The
+tables come out identical either way.
 */
+void MSG_StartHuffman( void ) {
+#ifdef __APPLE__
+	if ( !msgInit && !msgHuffThreadRunning ) {
+		msgHuffThreadRunning = pthread_create( &msgHuffThread, NULL, MSG_HuffmanThread, NULL ) == 0;
+	}
+#endif
+}
+
+static void MSG_WaitHuffman( void ) {
+#ifdef __APPLE__
+	if ( msgHuffThreadRunning ) {
+		pthread_join( msgHuffThread, NULL );
+		msgHuffThreadRunning = qfalse;
+	} else
+#endif
+	MSG_BuildHuffman();
+	msgInit = qtrue;
+}
 
 //===========================================================================

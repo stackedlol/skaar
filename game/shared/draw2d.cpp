@@ -134,10 +134,14 @@ float Font::Draw(float x, float y, float size, std::string_view text, Color colo
     return width;
 }
 
-bool Init(const Backend& backend, int vidWidth, int vidHeight) {
-    g_backend = backend;
+void Resize(int vidWidth, int vidHeight) {
     g_scale = vidHeight / kHeight;
     g_width = vidWidth / g_scale;
+}
+
+bool Init(const Backend& backend, int vidWidth, int vidHeight) {
+    g_backend = backend;
+    Resize(vidWidth, vidHeight);
     g_white = backend.registerShader("white");
 
     bool ok = g_fonts.display.Load(backend, "manrope-200");

@@ -49,3 +49,7 @@ profile
 /logs/
 /.tools/
 /build-*/
+
+# Python bytecode
+__pycache__/
+/dist/

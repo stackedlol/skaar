@@ -35,8 +35,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
   #define HOMEPATH_NAME_UNIX_LEGACY	".skaar"
   #define HOMEPATH_NAME				"Skaar"
   #define GAMENAME_FOR_MASTER		"Skaar"	// must NOT contain whitespace
-  #define CINEMATICS_LOGO		"skaarlogo.roq"
-  #define CINEMATICS_INTRO		"intro.roq"
+  // no CINEMATICS_LOGO / CINEMATICS_INTRO: there are none, so startup goes straight to the menu
 //  #define LEGACY_PROTOCOL	// You probably don't need this for your standalone game
   #define PROTOCOL_HANDLER		"skaar"
   #define CONFIG_PREFIX			"skaarconfig"

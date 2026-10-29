@@ -106,6 +106,39 @@ void GLimp_Minimize( void )
 	SDL_MinimizeWindow( SDL_window );
 }
 
+/*
+===============
+GLimp_DrawableSize
+
+skaar: the window's current size in pixels
+===============
+*/
+qboolean GLimp_DrawableSize( int *width, int *height )
+{
+	if ( !SDL_window )
+		return qfalse;
+
+	SDL_GL_GetDrawableSize( SDL_window, width, height );
+	return *width > 0 && *height > 0;
+}
+
+/*
+===============
+GLimp_FullscreenFlag
+
+skaar: macOS fullscreen is a borderless window over the whole display: no display
+mode switch and no Space animation, so Cmd+Tab and toggling are instant
+===============
+*/
+static Uint32 GLimp_FullscreenFlag( void )
+{
+#ifdef __APPLE__
+	return SDL_WINDOW_FULLSCREEN_DESKTOP;
+#else
+	return SDL_WINDOW_FULLSCREEN;
+#endif
+}
+
 
 /*
 ===============
@@ -492,8 +525,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 	// Center window
 	if( r_centerWindow->integer && !fullscreen )
 	{
-		x = ( desktopMode.w / 2 ) - ( glConfig.vidWidth / 2 );
-		y = ( desktopMode.h / 2 ) - ( glConfig.vidHeight / 2 );
+		x = y = SDL_WINDOWPOS_CENTERED_DISPLAY( display );
 	}
 
 	// Destroy existing state if it exists
@@ -514,7 +546,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 
 	if( fullscreen )
 	{
-		flags |= SDL_WINDOW_FULLSCREEN;
+		flags |= GLimp_FullscreenFlag();
 		glConfig.isFullscreen = qtrue;
 	}
 	else
@@ -775,7 +807,7 @@ static int GLimp_SetMode(int mode, qboolean fullscreen, qboolean noborder, qbool
 			continue;
 		}
 
-		if( fullscreen )
+		if( fullscreen && GLimp_FullscreenFlag() == SDL_WINDOW_FULLSCREEN )
 		{
 			SDL_DisplayMode desiredMode;
 
@@ -871,6 +903,12 @@ static qboolean GLimp_StartDriverAndSetMode(int mode, qboolean fullscreen, qbool
 	if (!SDL_WasInit(SDL_INIT_VIDEO))
 	{
 		const char *driverName;
+
+		// skaar: fullscreen stays a plain borderless window that never minimizes or
+		// floats above other apps, so Cmd+Tab / Alt+Tab switch away instantly
+		SDL_SetHint( SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0" );
+		SDL_SetHint( SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0" );
+		SDL_SetHint( SDL_HINT_ALLOW_TOPMOST, "0" );
 
 		if (SDL_Init(SDL_INIT_VIDEO) != 0)
 		{
@@ -1106,17 +1144,15 @@ void GLimp_Init( qboolean fixedFunction )
 
 	r_allowSoftwareGL = ri.Cvar_Get( "r_allowSoftwareGL", "0", CVAR_LATCH );
 	r_sdlDriver = ri.Cvar_Get( "r_sdlDriver", "", CVAR_ROM );
-	r_allowResize = ri.Cvar_Get( "r_allowResize", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	r_allowResize = ri.Cvar_Get( "r_allowResize", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_allowHighDPI = ri.Cvar_Get( "r_allowHighDPI", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_Get( "r_pixelRatio", "1", CVAR_ROM );
-	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	r_centerWindow = ri.Cvar_Get( "r_centerWindow", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	r_preferOpenGLES = ri.Cvar_Get( "r_preferOpenGLES", "-1", CVAR_ARCHIVE | CVAR_LATCH );
 
 	if( ri.Cvar_VariableIntegerValue( "com_abnormalExit" ) )
 	{
-		ri.Cvar_Set( "r_mode", va( "%d", R_MODE_FALLBACK ) );
 		ri.Cvar_Set( "r_fullscreen", "0" );
-		ri.Cvar_Set( "r_centerWindow", "0" );
 		ri.Cvar_Set( "com_abnormalExit", "0" );
 	}
 
@@ -1238,15 +1274,25 @@ void GLimp_EndFrame( void )
 
 		if( needToToggle )
 		{
-			sdlToggled = SDL_SetWindowFullscreen( SDL_window, r_fullscreen->integer ) >= 0;
+			sdlToggled = SDL_SetWindowFullscreen( SDL_window, r_fullscreen->integer ? GLimp_FullscreenFlag( ) : 0 ) >= 0;
 
 			// SDL_WM_ToggleFullScreen didn't work, so do it the slow way
 			if( !sdlToggled )
 				ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
+			else
+				glConfig.isFullscreen = !!r_fullscreen->integer;
 
 			ri.IN_Restart( );
 		}
 
 		r_fullscreen->modified = qfalse;
+	}
+
+	// skaar: vsync applies right away
+	if( r_swapInterval->modified )
+	{
+		if( SDL_GL_SetSwapInterval( r_swapInterval->integer ) == -1 )
+			ri.Printf( PRINT_DEVELOPER, "SDL_GL_SetSwapInterval failed: %s\n", SDL_GetError( ) );
+		r_swapInterval->modified = qfalse;
 	}
 }

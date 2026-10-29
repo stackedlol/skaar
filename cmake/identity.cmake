@@ -17,6 +17,7 @@ set(WINDOWS_ICON_PATH ${CMAKE_SOURCE_DIR}/misc/skaar/skaar.ico)
 
 set(MACOS_ICON_PATH ${CMAKE_SOURCE_DIR}/misc/skaar/skaar.icns)
 set(MACOS_BUNDLE_ID org.skaar.${CLIENT_NAME})
+set(MACOS_APP_NAME Skaar)
 
 set(COPYRIGHT "Skaar, based on ioquake3. Quake III Arena source code Copyright (C) 1999-2005 id Software, Inc. GPLv2.")
 

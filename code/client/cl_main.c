@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../sys/sys_local.h"
 #include "../sys/sys_loadlib.h"
+#include "../qcommon/dev.h"
 
 #ifdef USE_MUMBLE
 #include "libmumblelink.h"
@@ -3168,6 +3169,21 @@ void CL_ShutdownRef( void ) {
 
 /*
 ============
+CL_VideoResized
+
+skaar: the drawable size is new (renderer start, window resize, fullscreen
+toggle). The ui and cgame modules re-read the glconfig when r_vidSize changes.
+============
+*/
+void CL_VideoResized( void ) {
+	g_console_field_width = cls.glconfig.vidWidth / g_smallchar_width - 2;
+	g_consoleField.widthInChars = g_console_field_width;
+	Cvar_Set( "r_vidSize", va( "%dx%d", cls.glconfig.vidWidth, cls.glconfig.vidHeight ) );
+	Dev_SuppressSpikes( 30 );	// resizing the render targets and the window is a known hitch
+}
+
+/*
+============
 CL_InitRenderer
 ============
 */
@@ -3179,8 +3195,7 @@ void CL_InitRenderer( void ) {
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.whiteShader = re.RegisterShader( "white" );
 	cls.consoleShader = re.RegisterShader( "console" );
-	g_console_field_width = cls.glconfig.vidWidth / g_smallchar_width - 2;
-	g_consoleField.widthInChars = g_console_field_width;
+	CL_VideoResized();
 
 	// skaar: GPU string for crash reports, ignore the restart hitch
 	CL_DevOnRendererStarted();
@@ -3262,6 +3277,7 @@ void CL_InitRef( void ) {
 
 #ifdef USE_RENDERER_DLOPEN
 	cl_renderer = Cvar_Get("cl_renderer", "opengl2", CVAR_ARCHIVE | CVAR_LATCH);
+	Cvar_Get( "r_vidSize", "", CVAR_ROM );	// skaar: CL_VideoResized
 
 	Com_sprintf(dllName, sizeof(dllName), "renderer_%s" DLL_EXT, cl_renderer->string);
 
@@ -3547,6 +3563,10 @@ CL_Init
 */
 void CL_Init( void ) {
 	Com_Printf( "----- Client Initialization -----\n" );
+
+#ifdef USE_OPENAL
+	S_AL_WarmUp();
+#endif
 
 	Con_Init ();
 

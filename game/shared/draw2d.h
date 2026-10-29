@@ -60,6 +60,8 @@ struct Fonts {
 
 // Call once per module init (and again after vid_restart).
 bool Init(const Backend& backend, int vidWidth, int vidHeight);
+// The window's drawable size changed (resize, fullscreen toggle; r_vidSize).
+void Resize(int vidWidth, int vidHeight);
 const Fonts& GetFonts();
 
 float Width();   // canvas width in virtual units

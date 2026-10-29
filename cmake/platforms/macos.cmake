@@ -14,8 +14,10 @@ list(APPEND COMMON_LIBRARIES "-framework Cocoa")
 list(APPEND CLIENT_LIBRARIES "-framework IOKit")
 # skaar: raw (unaccelerated) mouse motion via GCMouse; weak so macOS 11-13 still launch
 list(APPEND CLIENT_LIBRARIES "-weak_framework GameController")
-list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx_rawmouse.m)
+list(APPEND CLIENT_PLATFORM_SOURCES ${SOURCE_DIR}/sys/sys_osx_rawmouse.m ${SOURCE_DIR}/sys/sys_osx_window.m)
 list(APPEND RENDERER_LIBRARIES "-framework OpenGL")
+# skaar: drop every function and datum nothing references from the binaries
+add_link_options(-Wl,-dead_strip)
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
 # Universal by default; pass -DCMAKE_OSX_ARCHITECTURES=arm64 for faster dev builds
@@ -31,12 +33,13 @@ endif()
 function(finish_macos_app)
     get_filename_component(MACOS_ICON_FILE ${MACOS_ICON_PATH} NAME)
 
-    set(MACOS_APP_BUNDLE_NAME ${CLIENT_NAME})
+    set(MACOS_APP_BUNDLE_NAME ${MACOS_APP_NAME})
     set(MACOS_APP_EXECUTABLE_NAME ${CLIENT_BINARY})
     set(MACOS_APP_GUI_IDENTIFIER ${MACOS_BUNDLE_ID})
     set(MACOS_APP_ICON_FILE ${MACOS_ICON_FILE})
-    set(MACOS_APP_SHORT_VERSION_STRING ${PRODUCT_VERSION})
-    set(MACOS_APP_BUNDLE_VERSION ${PRODUCT_VERSION})
+    # skaar: macOS wants plain dotted numbers here; the engine reports the git version
+    set(MACOS_APP_SHORT_VERSION_STRING ${PROJECT_VERSION})
+    set(MACOS_APP_BUNDLE_VERSION ${PROJECT_VERSION})
     set(MACOS_APP_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET})
     set(MACOS_APP_COPYRIGHT ${COPYRIGHT})
 

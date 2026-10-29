@@ -2957,6 +2957,38 @@ void R_CreateBuiltinImages( void ) {
 
 
 /*
+================
+R_ResizeScreenImages
+
+skaar: new storage for the screen-sized render targets (window resize, fullscreen
+toggle). The texture objects stay, so the FBOs they are attached to stay valid.
+================
+*/
+static void R_ResizeImage( image_t *image, int width, int height )
+{
+	if ( !image )
+		return;
+
+	image->width = image->uploadWidth = width;
+	image->height = image->uploadHeight = height;
+	qglTextureImage2DEXT( image->texnum, GL_TEXTURE_2D, 0, image->internalFormat, width, height, 0,
+		PixelDataFormatFromInternalFormat( image->internalFormat ), GL_UNSIGNED_BYTE, NULL );
+}
+
+void R_ResizeScreenImages( int width, int height )
+{
+	R_ResizeImage( tr.renderImage, width, height );
+	R_ResizeImage( tr.screenScratchImage, width, height );
+	R_ResizeImage( tr.hdrDepthImage, width, height );
+	R_ResizeImage( tr.sunRaysImage, width, height );
+	R_ResizeImage( tr.renderDepthImage, width, height );
+	R_ResizeImage( tr.quarterImage[0], width / 2, height / 2 );
+	R_ResizeImage( tr.quarterImage[1], width / 2, height / 2 );
+	R_ResizeImage( tr.screenSsaoImage, width / 2, height / 2 );
+	R_ResizeImage( tr.screenShadowImage, width, height );
+}
+
+/*
 ===============
 R_SetColorMappings
 ===============
