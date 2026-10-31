@@ -29,8 +29,8 @@ void AimAt(Vec3 p, float& yaw, float& pitch) {
     pitch = std::atan2(p.z - kEye.z, std::hypot(p.x - kEye.x, p.y - kEye.y)) * kDeg;
 }
 
-// Perfect tracking of target 0 with commands spaced by dts[i % n]; returns accuracy
-float TrackWithSteps(const Scenario& sc, const std::vector<float>& dts) {
+// Perfect tracking of target 0 with commands spaced by dts[i % n]; the run record
+RunRecord TrackWithSteps(const Scenario& sc, const std::vector<float>& dts) {
     TrainerSim sim;
     sim.Start(sc, 99, kEye, 0);
     float t = 0;
@@ -42,7 +42,7 @@ float TrackWithSteps(const Scenario& sc, const std::vector<float>& dts) {
         AimAt(sim.TargetPosition(sim.Targets()[0]), yaw, pitch);
         sim.Input(t, kEye, yaw, pitch, i == 0, true, dt);
     }
-    return sim.Accuracy();
+    return sim.Record();
 }
 
 }  // namespace
@@ -70,18 +70,34 @@ TEST("hit at the target's edge, miss just outside") {
     CHECK(misses == 4);
 }
 
-TEST("perfect tracking scores the same at 30, 125, 1000 Hz and with spikes") {
+TEST("perfect tracking scores the same at 30, 125, 1000 Hz; a frame spike credits at most 0.05 s") {
     const Scenario sc = Make(R"({"duration": 10, "fire": "hold", "targets": {"alive": 1, "radius": 16, "health": 1000,
         "spawn": {"distance": [500, 800], "yaw": [-40, 40], "pitch": [-5, 15]},
         "motion": {"type": "float", "speed": [200, 500], "changeEvery": [0.15, 0.6]}}})");
-    const float a30 = TrackWithSteps(sc, {1 / 30.0f});
-    const float a125 = TrackWithSteps(sc, {1 / 125.0f});
-    const float a1000 = TrackWithSteps(sc, {1 / 1000.0f});
-    const float spiky = TrackWithSteps(sc, {0.004f, 0.004f, 0.25f, 0.004f, 0.06f, 0.008f, 0.12f});
-    CHECK_NEAR(a30, 1.0, 1e-4);
-    CHECK_NEAR(a125, 1.0, 1e-4);
-    CHECK_NEAR(a1000, 1.0, 1e-4);
-    CHECK_NEAR(spiky, 1.0, 1e-4);
+    const RunRecord r30 = TrackWithSteps(sc, {1 / 30.0f});
+    const RunRecord r125 = TrackWithSteps(sc, {1 / 125.0f});
+    const RunRecord r1000 = TrackWithSteps(sc, {1 / 1000.0f});
+    const RunRecord spiky = TrackWithSteps(sc, {0.004f, 0.004f, 0.25f, 0.004f, 0.06f, 0.008f, 0.12f});
+    for (const RunRecord* r : {&r30, &r125, &r1000, &spiky}) {
+        CHECK_NEAR(r->summary.accuracy, 1.0, 1e-4);
+    }
+    // The aim-error samples sit on a fixed 20 Hz grid, so a perfectly tracked
+    // run logs the same series at every command rate: 10 s / 0.05 s.
+    const size_t samples = 200;
+    CHECK(r30.shots.size() == samples);
+    CHECK(r125.shots.size() == samples);
+    CHECK(r1000.shots.size() == samples);
+    // The score is on-target seconds x 100. A run stops issuing commands at the
+    // last t before the duration and the sim credits nothing once it is
+    // finished, so each rate can be short of the full 10 s by one frame at most.
+    const float full = sc.duration * sc.score.perSecondOnTarget;
+    CHECK_NEAR(r30.summary.score, full, 0.034f * sc.score.perSecondOnTarget);
+    CHECK_NEAR(r125.summary.score, full, 0.009f * sc.score.perSecondOnTarget);
+    CHECK_NEAR(r1000.summary.score, full, 0.002f * sc.score.perSecondOnTarget);
+    // A hitch is not free: dt is clamped to 0.05 s per command, so the spiky run
+    // is credited 3.748 s of its 10 s and cannot log the samples it slept through.
+    CHECK_NEAR(spiky.summary.onTarget, 3.748f, 0.02f);
+    CHECK(spiky.shots.size() < samples / 2);
 }
 
 TEST("a click after a long frame spike hits where the target is now") {

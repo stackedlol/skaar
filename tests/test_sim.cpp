@@ -92,6 +92,79 @@ TEST("target motion doesn't depend on the update rate") {
     }
 }
 
+TEST("target motion is the same however the time axis is diced") {
+    // changeEvery at the parser's floor: one Advance() has to apply 1200
+    // direction changes for this target alone, well past the old 1000 cap that
+    // truncated the step and then stamped stateT = 60 anyway
+    const Scenario sc = Make(R"({"duration": 60, "fire": "hold", "targets": {"alive": 1, "radius": 16,
+        "health": 1000, "spawn": {"distance": 800, "yaw": [-30, 30], "pitch": [-10, 10]},
+        "motion": {"type": "float", "speed": [200, 400], "changeEvery": [0.05, 0.05]}}})");
+    TrainerSim once, fine;
+    once.Start(sc, 1234, kEye, 0);
+    once.Advance(60);
+    fine.Start(sc, 1234, kEye, 0);
+    for (int i = 1; i <= 60000; i++) {
+        fine.Advance(i * 0.001f);
+    }
+    CHECK_NEAR(once.Targets()[0].stateT, 60, 1e-3);
+    CHECK_NEAR(once.Targets()[0].yaw, fine.Targets()[0].yaw, 0.01);
+    CHECK_NEAR(once.Targets()[0].pitch, fine.Targets()[0].pitch, 0.01);
+}
+
+TEST("a spawn window that is a point on one axis still moves on the other") {
+    // "yaw": 0 is how a scenario says "this target only moves up and down"; the
+    // yaw wall sits at `now`, which used to win every tie and freeze pitch too
+    const Scenario sc = Make(R"({"duration": 20, "targets": {"alive": 1, "radius": 16, "health": 1000,
+        "spawn": {"distance": 800, "yaw": 0, "pitch": [-10, 10]},
+        "motion": {"type": "float", "speed": [200, 400], "changeEvery": [0.4, 0.9]}}})");
+    TrainerSim sim;
+    sim.Start(sc, 55, kEye, 0);
+    const float spawned = sim.Targets()[0].pitch;
+    for (int i = 1; i <= 2000; i++) {
+        sim.Advance(i * 0.01f);
+    }
+    CHECK_NEAR(sim.Targets()[0].yaw, 0, 1e-4);               // the point window pins yaw
+    CHECK(std::fabs(sim.Targets()[0].pitch - spawned) > 2);  // and pitch still bounces
+    TrainerSim once;
+    once.Start(sc, 55, kEye, 0);
+    once.Advance(20);
+    CHECK_NEAR(once.Targets()[0].pitch, sim.Targets()[0].pitch, 0.01);
+}
+
+TEST("a target that lands on a spawn-window edge bounces off it") {
+    // A float rounding loss can leave a target exactly on a bound with its velocity
+    // still pointing out: the crossing from there is 0, so a wall that only counts
+    // when it is strictly ahead never bounces it and that axis is lost until the
+    // next direction change. At 125 Hz, seed 167 rode pitch.max for 104 commands
+    // (0.83 s) at 16.1 deg/s of travel. The one command whose step lost the crossing
+    // may end on the edge; the next one has to leave it, so no two in a row may sit
+    // there.
+    const Scenario sc = Make(kStrafe);
+    const auto& o = sc.targets;
+    auto atEdge = [&o](const Target& t) {
+        return (t.vyaw > 0 && t.yaw >= o.yaw.max) || (t.vyaw < 0 && t.yaw <= o.yaw.min) ||
+               (t.vpitch > 0 && t.pitch >= o.pitch.max) || (t.vpitch < 0 && t.pitch <= o.pitch.min);
+    };
+    int longest = 0;
+    for (uint32_t seed = 1; seed <= 200; seed++) {
+        TrainerSim sim;
+        sim.Start(sc, seed, kEye, 0);
+        int streak = 0;
+        for (int i = 1; i <= 30 * 125; i++) {
+            sim.Advance(i / 125.0f);
+            bool pinned = false;
+            for (const Target& t : sim.Targets()) {
+                pinned = pinned || (t.alive && atEdge(t));
+            }
+            streak = pinned ? streak + 1 : 0;
+            longest = std::max(longest, streak);
+        }
+    }
+    if (longest > 1) {
+        check::Fail(__FILE__, __LINE__, "a target rode a spawn-window edge for " + std::to_string(longest) + " commands");
+    }
+}
+
 TEST("moving targets stay inside the spawn window") {
     const Scenario sc = Make(kStrafe);
     TrainerSim sim;
