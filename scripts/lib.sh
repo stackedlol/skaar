@@ -51,14 +51,22 @@ dev_engine_args() {
 PIPE_NAME=dev.pipe
 pipe_path() { echo "$HOMEDIR/base/$PIPE_NAME"; }
 
-# Send a console command to the running game, if any. Never blocks.
-send_cmd() {
-    p=$(pipe_path)
+# pipe_write <fifo> <line...>: never blocks and returns 1 if the reader is gone.
+# Opening a FIFO for writing with no reader blocks forever, and a crashed game
+# leaves its pipe on disk, so write from a background process and give up on it.
+pipe_write() {
+    p=$1
+    shift
     [ -p "$p" ] || return 1
-    # open non-blocking-ish: a background writer so a dead reader can't hang us
     ( printf '%s\n' "$*" > "$p" ) 2>/dev/null &
     w=$!
     sleep 0.2
-    kill "$w" 2>/dev/null && return 1
+    if kill "$w" 2>/dev/null; then
+        kill -9 "$w" 2>/dev/null
+        return 1
+    fi
     return 0
 }
+
+# Send a console command to the running game, if any. Never blocks.
+send_cmd() { pipe_write "$(pipe_path)" "$*"; }

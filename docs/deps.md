@@ -24,4 +24,4 @@ Licenses are compatible with GPLv2. See each directory.
 | fswatch | file watching for `scripts/dev-watch.sh` |
 | lldb (macOS) / gdb (Linux) | crash backtraces in `scripts/dev.sh` |
 | perl | millisecond timing in dev-watch status lines (falls back to seconds without it) |
-| Python 3 + Pillow | only for regenerating placeholder assets (`tools/gen_assets.py`) |
+| Python 3 + Pillow **11.3.0** | only for regenerating placeholder assets (`tools/gen_assets.py`). Pin it: glyph metrics come from Pillow's bundled FreeType and move between builds - a fresh run with any Pillow we tried (8.4 through 11.3) writes advance 19.00 where the committed `jbmono-400.fontinfo` has 19.20, so no current Pillow reproduces the shipped atlases exactly - and `game/shared/draw2d.cpp` draws every string from those numbers. `gen_assets.py` therefore refuses to rewrite a `.fontinfo` whose metrics would change unless you pass `--allow-font-drift`, so a regeneration is a deliberate, reviewable diff. |

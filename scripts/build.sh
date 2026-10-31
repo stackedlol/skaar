@@ -16,6 +16,7 @@ DIR=$(build_dir "$CONFIG")
 # startup on a newer macOS (docs/macos-notes.md); fall back to UBSan only.
 asan_works() {
     probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/skaar-asan.XXXXXX")
+    trap 'rm -rf "$probe_dir"' EXIT INT TERM   # an interrupt must not leave it behind
     printf 'int main(void){return 0;}\n' > "$probe_dir/p.c"
     ok=1
     if cc -fsanitize=address "$probe_dir/p.c" -o "$probe_dir/p" 2>/dev/null; then

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate Skaar's assets from sources in the repo.
 
-    python3 tools/gen_assets.py          (needs: pip install pillow; macOS also uses iconutil)
+    python3 tools/gen_assets.py [--allow-font-drift]
+                                        (needs: pillow 11.3.0, see docs/deps.md; macOS also uses iconutil)
 
 Outputs (see docs/assets.md for licenses):
   logo      misc/skaar/skaar-logo-source.png ->
@@ -21,7 +22,15 @@ import sys
 import tempfile
 import wave
 
+import PIL
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+# The font atlases are shipped inputs, not build output: Pillow's bundled
+# FreeType rounds hinted advances differently between releases, so regenerating
+# on another Pillow rewrites every glyph metric the UI reads. Pass
+# --allow-font-drift to say that is intended (docs/deps.md has the version the
+# committed files were made with).
+ALLOW_FONT_DRIFT = "--allow-font-drift" in sys.argv[1:]
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.path.join(REPO, "data", "base")
@@ -169,6 +178,23 @@ def logo():
 UI_CHARS = [chr(c) for c in range(32, 127)] + list("·°×–—…←→↑↓")
 
 
+def guard_font_metrics(path, text):
+    """Stop a Pillow/FreeType difference from silently rewriting the UI's text.
+
+    game/shared/draw2d.cpp reads every field of a .fontinfo (advance, xoff/yoff,
+    tile size, and the cap height from 'H'), so different metrics are a visible
+    UI change. Refuse to write them unless the run asked for it."""
+    if ALLOW_FONT_DRIFT or not os.path.exists(path):
+        return
+    with open(path) as committed:
+        if committed.read() == text:
+            return
+    sys.exit("gen_assets: %s would change, and its metrics are what the UI draws.\n"
+             "Pillow here is %s; docs/deps.md pins the version for these atlases (the .tga\n"
+             "glyph rasters drift with it too). Re-run with --allow-font-drift to accept that."
+             % (rel(path), PIL.__version__))
+
+
 def font_atlas(name, path, weight, size, pad=6, tabular=False):
     """Proportional font atlas + metrics for the modules' text renderer.
 
@@ -219,10 +245,12 @@ def font_atlas(name, path, weight, size, pad=6, tabular=False):
         atlas.alpha_composite(glyph, (gx, gy))
         lines.append("glyph %d %d %d %d %d %d %d %.2f" % (ord(ch), gx, gy, img.width, img.height, xoff, yoff, adv))
 
-    save_tga(atlas, "fonts/%s.tga" % name)
     info = os.path.join(BASE, "fonts", name + ".fontinfo")
+    text = "\n".join(lines) + "\n"
+    guard_font_metrics(info, text)   # before the atlas is written, so a stop changes nothing
+    save_tga(atlas, "fonts/%s.tga" % name)
     with open(info, "w") as out:
-        out.write("\n".join(lines) + "\n")
+        out.write(text)
     print("wrote", rel(info))
 
 

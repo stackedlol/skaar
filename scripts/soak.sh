@@ -20,16 +20,18 @@ STEP_SECONDS=${SOAK_STEP_SECONDS:-40}
 
 fail() { printf '%sSOAK FAIL: %s%s\n' "$C_RED" "$*" "$C_OFF"; stop_game; exit 1; }
 
-printf '[%s] building %s...\n' "$(now)" "$CONFIG"
-"$REPO/scripts/build.sh" "$CONFIG" > "$LOGS/soak-build-$STAMP.log" 2>&1 || { tail -20 "$LOGS/soak-build-$STAMP.log"; exit 1; }
-
 rm -rf "$H"
 mkdir -p "$H/base" "$LOGS"
 QLOG="$H/base/qconsole.log"
 PIPE="$H/base/dev.pipe"
 
+printf '[%s] building %s...\n' "$(now)" "$CONFIG"
+"$REPO/scripts/build.sh" "$CONFIG" > "$LOGS/soak-build-$STAMP.log" 2>&1 || { tail -20 "$LOGS/soak-build-$STAMP.log"; exit 1; }
+
 game_pid() { pgrep -f "fs_homepath $H" | head -1; }
-send() { [ -p "$PIPE" ] && printf '%s\n' "$*" > "$PIPE"; }
+# never blocks: a game that died leaves its pipe behind, and a plain redirect
+# into a reader-less FIFO would hang the soak forever (sample() reports it)
+send() { pipe_write "$PIPE" "$*" || true; }
 stop_game() {
     send quit 2>/dev/null || true
     sleep 2
@@ -53,10 +55,11 @@ START=$(date +%s)
 END=$((START + MINUTES * 60))
 
 sample() {
-    send dev_stats
-    sleep 0.5
+    # liveness first: a crash or quit leaves nothing to write the pipe to
     rss=$(ps -o rss= -p "$PID" 2>/dev/null | tr -d ' ')
     [ -n "$rss" ] || fail "game exited during step '$1'"
+    send dev_stats
+    sleep 0.5
     stats=$(grep -a "dev_stats:" "$QLOG" | tail -1)
     fps=$(printf '%s' "$stats" | sed -n 's/.*fps \([0-9.]*\),.*/\1/p')
     p99=$(printf '%s' "$stats" | sed -n 's/.*p99 \([0-9.]*\) ms.*/\1/p')
@@ -105,6 +108,7 @@ stop_game
 PROBLEMS=$(grep -a -E 'ERROR|^Error:|ASSERT|Sanitizer|runtime error:|crash report' "$QLOG" | grep -v 'dev_crash' | head -20 || true)
 [ -z "$PROBLEMS" ] || { printf '%s\n' "$PROBLEMS"; fail "log has errors ($QLOG)"; }
 
+rc=0
 awk -F, 'NR > 1 { rss[n++] = $3; p99sum += $5; if ($5 > p99max) p99max = $5 }
 END {
     if (n < 10) { print "too few samples: " n; exit 2 }
@@ -115,6 +119,11 @@ END {
     printf "samples %d, rss first tenth %.0f MB, last tenth %.0f MB (%+.1f%%), frame p99 mean %.2f ms, max %.2f ms\n",
         n, a / 1024, b / 1024, growth * 100, p99sum / n, p99max
     if (growth > 0.25 && (b - a) > 65536) exit 1
-}' "$CSV" || fail "resident memory kept growing (see $CSV)"
+}' "$CSV" || rc=$?
+# 2 is awk's "too few samples", not a leak: don't diagnose a run that measured nothing
+if [ "$rc" = 2 ]; then
+    fail "too few samples in $CSV (the run was too short to judge memory)"
+fi
+[ "$rc" = 0 ] || fail "resident memory kept growing (see $CSV)"
 
 printf '%sSOAK PASS%s: %s min, %d cycles, no errors (%s)\n' "$C_GRN" "$C_OFF" "$MINUTES" "$cycle" "$CSV"

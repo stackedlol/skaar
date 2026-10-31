@@ -6,6 +6,11 @@
 #      loaded the map, or the log has ERROR / ASSERT / sanitizer reports
 #   SMOKE_SECONDS=20 SMOKE_MAP=testroom ./scripts/smoke.sh
 set -eu
+# An automated run: its own fs_homepath, or the +set values below (com_pipefile
+# is CVAR_ARCHIVE) get written into the human's config. Must be set before
+# lib.sh picks HOMEDIR up (.gitignore covers /.home-*/; the engine makes the dir)
+SKAAR_DEV_HOME=${SKAAR_DEV_HOME:-"$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/.home-smoke"}
+export SKAAR_DEV_HOME
 . "$(dirname -- "$0")/lib.sh"
 
 SECONDS_TO_RUN=${SMOKE_SECONDS:-20}
@@ -70,7 +75,7 @@ ALIVE=1
 kill -0 "$PID" 2>/dev/null || ALIVE=0
 
 if [ "$ALIVE" = 1 ]; then
-    printf 'quit\n' > "$HOMEDIR/base/$PIPE" 2>/dev/null || kill -TERM "$PID"
+    pipe_write "$HOMEDIR/base/$PIPE" quit || kill -TERM "$PID"
     i=0
     while kill -0 "$PID" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     kill -0 "$PID" 2>/dev/null && { kill -KILL "$PID"; fail "server didn't quit within 5s"; }

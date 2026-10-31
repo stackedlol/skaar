@@ -118,17 +118,54 @@ struct Light {
     float sun = 0.55f;
 };
 
+// Every coordinate is rounded to int32 for the BSP and drives the light-grid
+// size, so bound them here, at the one door floats come in through. The grid is
+// 64x64x128 at 8 bytes a point, so +/-16384 (four times the largest shipped
+// map) already asks for ~0.5 GB; the old +/-1e6 asked for 10^14 bytes and died
+// in the allocator instead of reporting a bad map.
+constexpr float kMaxCoord = 16384.0f;
+
+// A room's wall thickness is added to those coordinates, so it needs the same
+// bound: "wall": 3e9 put the room's bounds at +/-3e9 and overflowed int32 below.
+constexpr float kMaxWall = 4096.0f;
+
 Vec3 ReadVec3(const json& j, const char* what) {
     if (!j.is_array() || j.size() != 3) {
         throw std::runtime_error(std::string(what) + " must be an array of 3 numbers");
     }
-    return {j[0].get<float>(), j[1].get<float>(), j[2].get<float>()};
+    Vec3 out;
+    for (int i = 0; i < 3; i++) {
+        const float v = j[i].get<float>();
+        if (!std::isfinite(v) || std::fabs(v) > kMaxCoord) {
+            throw std::runtime_error(std::string(what) + " must be finite and within +/-16384");
+        }
+        out[i] = v;
+    }
+    return out;
 }
 
 std::string FormatVec3(const Vec3& v) {
     char buf[96];
     std::snprintf(buf, sizeof(buf), "%g %g %g", v[0], v[1], v[2]);
     return buf;
+}
+
+// A Q3 entity lump has no escape syntax: COM_ParseExt ends a quoted token at the
+// next quote or newline, so either character inside a value mis-tokenises the
+// whole lump and the game module drops the map. q3map2 substitutes, so do we.
+std::string EntitySafe(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        if (c == '"') {
+            out.push_back('\'');
+        } else if (static_cast<unsigned char>(c) < 0x20) {
+            out.push_back(' ');
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
 }
 
 // "room": hollow box built from six wall brushes around an interior volume
@@ -139,6 +176,18 @@ void AddRoom(const json& room, std::vector<Box>& boxes) {
     const std::string walls = room.value("walls", std::string("wall"));
     const std::string floorMat = room.value("floor", walls);
     const std::string ceiling = room.value("ceiling", walls);
+
+    // the walls are built from these directly, so ReadBox's guard never runs:
+    // a swapped or zero-thickness room compiles to brushes that collide with
+    // nothing and says nothing about it
+    for (int i = 0; i < 3; i++) {
+        if (mn[i] >= mx[i]) {
+            throw std::runtime_error("room min must be < max on every axis");
+        }
+    }
+    if (!std::isfinite(t) || t <= 0.0f || t > kMaxWall) {
+        throw std::runtime_error("room wall must be finite, > 0 and within 4096");
+    }
 
     boxes.push_back({{mn[0] - t, mn[1] - t, mn[2] - t}, {mx[0] + t, mx[1] + t, mn[2]}, floorMat, {}});
     boxes.push_back({{mn[0] - t, mn[1] - t, mx[2]}, {mx[0] + t, mx[1] + t, mx[2] + t}, ceiling, {}});
@@ -345,7 +394,7 @@ private:
         Vec3 d = light_.sunDir;
         const float len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
         const float lambert = std::fmax(0.0f, -(n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / len);
-        const float v = std::fmin(1.0f, light_.ambient + light_.sun * lambert);
+        const float v = std::fmax(0.0f, std::fmin(1.0f, light_.ambient + light_.sun * lambert));
         return static_cast<uint8_t>(std::lround(v * 255.0f * kOverbrightScale));
     }
 
@@ -584,7 +633,8 @@ private:
         const float lng = std::acos(std::fmax(-1.0f, std::fmin(1.0f, tz)));
 
         const auto byte = [](float v) {
-            return static_cast<uint8_t>(std::lround(std::fmin(1.0f, v) * 255.0f * kOverbrightScale));
+            // a negative light would wrap through uint8_t into the bright half
+            return static_cast<uint8_t>(std::lround(std::fmax(0.0f, std::fmin(1.0f, v)) * 255.0f * kOverbrightScale));
         };
         const uint8_t point[8] = {
             byte(light_.ambient), byte(light_.ambient), byte(light_.ambient),
@@ -601,7 +651,7 @@ private:
     }
 
     std::string EntityString() const {
-        std::string out = "{\n\"classname\" \"worldspawn\"\n\"message\" \"" + message_ + "\"\n}\n";
+        std::string out = "{\n\"classname\" \"worldspawn\"\n\"message\" \"" + EntitySafe(message_) + "\"\n}\n";
         for (size_t e = 0; e < entities_.size(); e++) {
             const json& ent = entities_[e];
             out += "{\n";
@@ -622,7 +672,7 @@ private:
                 } else {
                     text = value.dump();
                 }
-                out += "\"" + key + "\" \"" + text + "\"\n";
+                out += "\"" + EntitySafe(key) + "\" \"" + EntitySafe(text) + "\"\n";
             }
             out += "}\n";
         }

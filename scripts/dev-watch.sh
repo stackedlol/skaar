@@ -147,13 +147,19 @@ handle_batch() {
                 start_game
                 status "$C_GRN" "build ok ${BUILD_TIME}s, relaunched"
             elif [ "$kind" = module ]; then
-                send_cmd "map_restart 0" && send_cmd "vid_restart"
-                status "$C_GRN" "build ok ${BUILD_TIME}s, game modules hot-reloaded"
-                toast "build ok, game modules reloaded"
+                if send_cmd "map_restart 0" && send_cmd "vid_restart"; then
+                    status "$C_GRN" "build ok ${BUILD_TIME}s, game modules hot-reloaded"
+                    toast "build ok, game modules reloaded"
+                else
+                    status "$C_YEL" "build ok ${BUILD_TIME}s, hot-reload NOT sent (couldn't reach the game)"
+                fi
             else
                 # shellcheck disable=SC2086
-                send_cmd "dev_reload$map_files"
-                status "$C_GRN" "build ok ${BUILD_TIME}s, map reloaded:$map_files"
+                if send_cmd "dev_reload$map_files"; then
+                    status "$C_GRN" "build ok ${BUILD_TIME}s, map reloaded:$map_files"
+                else
+                    status "$C_YEL" "build ok ${BUILD_TIME}s, map reload NOT sent (couldn't reach the game)"
+                fi
             fi
             ;;
     esac
