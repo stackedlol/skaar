@@ -27,15 +27,17 @@ std::string MineName(const std::string& name) {
                : name + suffix;
 }
 
-// A range edited as its centre; the spread around it is kept as a fraction
-bool CentreSlider(float y, const char* label, skaar::Range& r, float lo, float hi, float step, const char* format,
-                  const std::string& hint = "") {
+// A range edited as its centre; the spread around it is kept as a fraction.
+// `minFloor` is the parser's own floor for the minimum: the slider moves the centre
+// only, so staying above it can still leave a range the scenario file may not hold.
+bool CentreSlider(float y, const char* label, skaar::Range& r, float lo, float hi, float minFloor, float step,
+                  const char* format, const std::string& hint = "") {
     float centre = (r.min + r.max) / 2;
     const float spread = centre > 0 ? (r.max - r.min) / 2 / centre : 0;
     if (!ValueSlider(y, label, centre, lo, hi, step, format, hint)) {
         return false;
     }
-    r.min = centre * (1 - spread);
+    r.min = std::max(minFloor, centre * (1 - spread));
     r.max = centre * (1 + spread);
     return true;
 }
@@ -130,7 +132,7 @@ void DrawEditor() {
     ValueSlider(y, "Lifetime", t.lifetime, 0, 5, 0.1f, t.lifetime > 0 ? "%.1f s" : "forever", "UNHIT TARGETS VANISH");
     y += kRowStep;
 
-    CentreSlider(y, "Distance", t.distance, 150, 2000, 25, "%.0f u");
+    CentreSlider(y, "Distance", t.distance, 150, 2000, 64, 25, "%.0f u");  // parser: distance >= 64
     y += kRowStep;
 
     float spread = (t.yaw.max - t.yaw.min) / 2;
@@ -153,9 +155,9 @@ void DrawEditor() {
     y += kRowStep;
 
     if (t.motion != skaar::MotionType::kStatic) {
-        CentreSlider(y, "Speed", t.speed, 20, 900, 10, "%.0f u/s");
+        CentreSlider(y, "Speed", t.speed, 20, 900, 0, 10, "%.0f u/s");
         y += kRowStep;
-        CentreSlider(y, "Turns every", t.changeEvery, 0.2f, 3, 0.05f, "%.2f s");
+        CentreSlider(y, "Turns every", t.changeEvery, 0.2f, 3, 0.05f, 0.05f, "%.2f s");
         y += kRowStep;
     }
 

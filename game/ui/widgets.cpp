@@ -208,10 +208,11 @@ int Adjusted(int id) {
     return 0;
 }
 
-float Scroll(const std::string& key, const Rect& view, float contentHeight, float focusTop, float focusBottom) {
+float Scroll(const std::string& key, const Rect& view, float contentHeight, float focusTop, float focusBottom,
+             float rowHeight) {
     float& s = ui.scroll[key];
     if (in.wheel && Hovered(view)) {
-        s -= in.wheel * 72.0f;
+        s -= in.wheel * rowHeight;  // one row a notch: the offset stays on whole rows
         in.wheel = 0;
     }
     // keep the keyboard focus in view
@@ -365,7 +366,9 @@ void CellGrid(float x, float y, float cellW, float cellH, int cols, int count) {
 }
 
 std::string FormatDuration(float seconds) {
-    const int s = static_cast<int>(seconds + 0.5f);
+    // comes straight out of stats files the player can edit: bound it before the cast
+    const float safe = std::isfinite(seconds) ? std::clamp(seconds, 0.0f, 359999.0f) : 0.0f;
+    const int s = static_cast<int>(safe + 0.5f);
     if (s >= 3600) {
         return skaar::Va("%d h %02d m", s / 3600, (s / 60) % 60);
     }
@@ -511,7 +514,7 @@ bool ChoiceRow(float y, const char* label, const char* cvar, const std::vector<s
                const std::string& hint) {
     RowLayout row = BeginRow(y, label, hint);
     const std::string current = trap::CvarString(cvar);
-    int index = 0;
+    int index = -1;  // -1: the cvar holds a value this row doesn't offer
     for (size_t i = 0; i < choices.size(); i++) {
         if (choices[i].first == current) {
             index = static_cast<int>(i);
@@ -524,16 +527,41 @@ bool ChoiceRow(float y, const char* label, const char* cvar, const std::vector<s
     }
     bool changed = false;
     if (dir && !choices.empty()) {
-        index = (index + dir + static_cast<int>(choices.size())) % static_cast<int>(choices.size());
+        if (index < 0) {
+            // an unknown value (com_maxfps 250, a hex colour): step to the nearest
+            // entry on the side the key points to, so Right still reads as "up",
+            // and hold at the end of the list when the value is past every entry
+            const double cur = std::atof(current.c_str());
+            double pickVal = 0;
+            int pick = -1;  // nearest entry above (Right) or below (Left)
+            int end = 0;    // the list's own top or bottom
+            for (size_t i = 0; i < choices.size(); i++) {
+                const double c = std::atof(choices[i].first.c_str());
+                const double e = std::atof(choices[end].first.c_str());
+                if (dir > 0 ? c > e : c < e) {
+                    end = static_cast<int>(i);
+                }
+                if ((dir > 0 ? c > cur : c < cur) && (pick < 0 || (dir > 0 ? c < pickVal : c > pickVal))) {
+                    pick = static_cast<int>(i);
+                    pickVal = c;
+                }
+            }
+            index = pick < 0 ? end : pick;
+        } else {
+            index = (index + dir + static_cast<int>(choices.size())) % static_cast<int>(choices.size());
+        }
         trap::CvarSet(cvar, choices[index].first.c_str());
         changed = true;
     }
     const kit::Font& mono = kit::GetFonts().mono;
     const Color arrow = row.focused ? theme::kCreamSoft : theme::kCreamFaint;
+    // nothing matched: show the value the cvar really holds rather than entry 0
+    const std::string shown = choices.empty() ? "—"
+                              : index < 0    ? kit::Upper(current)
+                                             : kit::Upper(choices[index].second);
     mono.Draw(row.controlX, row.baseline, 24, "←", arrow);
-    mono.Draw(row.controlX + 44, row.baseline, 24, choices.empty() ? "—" : kit::Upper(choices[index].second),
-              theme::kCream, 0.08f);
-    const float w = choices.empty() ? 20 : mono.Measure(24, kit::Upper(choices[index].second), 0.08f);
+    mono.Draw(row.controlX + 44, row.baseline, 24, shown, theme::kCream, 0.08f);
+    const float w = choices.empty() ? 20 : mono.Measure(24, shown, 0.08f);
     mono.Draw(row.controlX + 44 + w + 24, row.baseline, 24, "→", arrow);
     return changed;
 }

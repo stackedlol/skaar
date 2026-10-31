@@ -28,14 +28,15 @@ void StepDots(float x, float y) {
 
 void DrawMouse(float top) {
     const float sens = trap::CvarValue("sensitivity");
-    float dpi = trap::CvarValue("sk_dpi");
+    // sens_dpi is the documented cvar (docs/feel.md, sens_test reads it); 0 means unset
+    float dpi = trap::CvarValue("sens_dpi");
     if (dpi <= 0) {
         dpi = 800;
     }
     float v = 0;
     float y = top;
     if (NumberRow(y, "Mouse DPI", dpi, 50, 64000, "%.0f", v, "FROM YOUR MOUSE SOFTWARE")) {
-        trap::CvarSet("sk_dpi", skaar::Va("%g", v));
+        trap::CvarSet("sens_dpi", skaar::Va("%g", v));
     }
     y += kRowStep;
     if (NumberRow(y, "Sensitivity", sens, 0.001f, 100, "%.3f", v)) {

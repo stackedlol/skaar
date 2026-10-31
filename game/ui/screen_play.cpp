@@ -3,6 +3,7 @@
 //
 // This file is part of Skaar. GPLv2 or later.
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 #include "../shared/move_ruleset.h"
@@ -144,8 +145,9 @@ void DrawPlay() {
         ui.selectedScenario = shown.front()->id;
     }
 
-    // list (scrolls)
-    const Rect view{m - 40, 232, kListW + 40, h - 232 - 130 - (data.scenarioErrors.empty() ? 0 : 60)};
+    // list (scrolls); a whole number of rows tall, so a row is never half in view
+    const float listH = std::floor((h - 232 - 130 - (data.scenarioErrors.empty() ? 0 : 60)) / kRowH) * kRowH;
+    const Rect view{m - 40, 232, kListW + 40, listH};
     const int firstId = ui.focusCount;
     float focusTop = -1, focusBottom = -1;
     for (size_t i = 0; i < shown.size(); i++) {
@@ -154,8 +156,9 @@ void DrawPlay() {
             focusBottom = focusTop + kRowH;
         }
     }
-    const float scroll = Scroll("play", view, shown.size() * kRowH, focusTop, focusBottom);
+    const float scroll = Scroll("play", view, shown.size() * kRowH, focusTop, focusBottom, kRowH);
 
+    int firstDrawn = -1, lastDrawn = -1;
     for (size_t i = 0; i < shown.size(); i++) {
         const skaar::Scenario& s = *shown[i];
         const float y = view.y + i * kRowH - scroll;
@@ -166,6 +169,10 @@ void DrawPlay() {
         if (!visible) {
             continue;
         }
+        if (firstDrawn < 0) {
+            firstDrawn = static_cast<int>(i);
+        }
+        lastDrawn = static_cast<int>(i);
         const bool focused = Focused(id);
         if (focused) {
             ui.selectedScenario = s.id;
@@ -198,10 +205,9 @@ void DrawPlay() {
             ui.selectedScenario = s.id;
         }
     }
-    // more rows than fit: say how many, above and below
-    const int above = static_cast<int>(scroll / kRowH + 0.5f);
-    const int visibleRows = static_cast<int>(view.h / kRowH);
-    const int below = static_cast<int>(shown.size()) - above - visibleRows;
+    // more rows than fit: count the rows above and below the ones actually drawn
+    const int above = firstDrawn > 0 ? firstDrawn : 0;
+    const int below = lastDrawn >= 0 ? static_cast<int>(shown.size()) - 1 - lastDrawn : 0;
     if (above > 0) {
         Label(m + kListW - 20, view.y - 14, skaar::Va("↑ %d MORE", above), theme::kCreamFaint, Align::kRight);
     }

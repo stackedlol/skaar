@@ -88,6 +88,13 @@ void StartScenario(const std::string& id) {
     if (!s) {
         return;
     }
+    // id is a file name and map comes from the scenario file: neither may carry a
+    // command break or a quote into the console buffer below
+    auto plain = [](const std::string& v) { return v.find_first_of(";\" \t\n\r") == std::string::npos; };
+    if (!plain(id) || !plain(s->map)) {
+        Com_Printf(S_COLOR_YELLOW "WARNING: %s: the scenario or map name can't go on the command line\n", id.c_str());
+        return;
+    }
     trap::CvarSet("sk_scenario", id.c_str());
     // movement physics: the server switches when g_movement changes (game/shared/move_ruleset.h)
     std::string ruleset = s->ruleset;
@@ -100,9 +107,9 @@ void StartScenario(const std::string& id) {
     trap::CvarSet("g_movement", ruleset.c_str());
     const std::string map = Info_ValueForKey(trap::GetConfigString(CS_SERVERINFO).c_str(), "mapname");
     if (InGame() && map == s->map) {
-        Exec(skaar::Va("sk_start %s\n", id.c_str()));
+        Exec(skaar::Va("sk_start \"%s\"\n", id.c_str()));
     } else {
-        Exec(skaar::Va("map %s\n", s->map.c_str()));
+        Exec(skaar::Va("map \"%s\"\n", s->map.c_str()));
     }
     Close();
 }
@@ -110,6 +117,12 @@ void StartScenario(const std::string& id) {
 void ShowRun(const std::string& file) {
     ui.selectedRun = file;
     ui.insightsTab = InsightsTab::kRun;
+    // a click on a chart dot lands in the middle of a draw, and Open() reloads the
+    // data that screen is still reading: let Refresh() do it once the frame is done
+    if (ui.drawing) {
+        ui.openRunAfterFrame = true;
+        return;
+    }
     if (ui.screen != Screen::kInsights) {
         Open(Screen::kInsights);
         ui.insightsTab = InsightsTab::kRun;
@@ -215,10 +228,11 @@ void Init() {
     ui.pointer = trap::R_RegisterShaderNoMip("gfx/skaar/cursor");
     ui.move = trap::S_RegisterSound("sound/ui/move.wav");
     ui.confirm = trap::S_RegisterSound("sound/ui/confirm.wav");
-    // menu-owned settings that must survive restarts
+    // menu-owned settings that must survive restarts (sens_dpi's client default is
+    // 0 = unset; the aim screens fall back to a sane 800)
     static vmCvar_t archived[6];
     const char* names[][2] = {{"sk_firstRunDone", "0"}, {"sk_convertYaw", "0.022"}, {"sk_convertSens", "0"},
-                              {"sk_arenaMovement", "cpm"}, {"sk_roamMovement", "cpm"}, {"sk_dpi", "800"}};
+                              {"sk_arenaMovement", "cpm"}, {"sk_roamMovement", "cpm"}, {"sens_dpi", "0"}};
     for (int i = 0; i < 6; i++) {
         trap::CvarRegister(&archived[i], names[i][0], names[i][1], CVAR_ARCHIVE);
     }
@@ -235,6 +249,7 @@ void Refresh(int realtime) {
         return;
     }
     BeginFrame();
+    ui.drawing = true;
     switch (ui.screen) {
         case Screen::kHome:
             DrawHome();
@@ -260,8 +275,14 @@ void Refresh(int realtime) {
         case Screen::kNone:
             break;
     }
+    ui.drawing = false;
     if (ui.back) {
         Back();
+    }
+    // the screen a draw asked for opens here, once nothing is reading the old data
+    if (ui.openRunAfterFrame) {
+        ui.openRunAfterFrame = false;
+        ShowRun(ui.selectedRun);
     }
     DrawMarker();
     Pointer();

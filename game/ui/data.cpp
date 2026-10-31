@@ -10,7 +10,9 @@ namespace ui {
 namespace {
 
 std::string StripJson(const std::string& name) {
-    return name.size() > 5 && name.compare(name.size() - 5, 5, ".json") == 0 ? name.substr(0, name.size() - 5) : name;
+    // the engine lists files case-insensitively, so ".JSON" arrives here too
+    return name.size() > 5 && Q_stricmp(name.c_str() + name.size() - 5, ".json") == 0 ? name.substr(0, name.size() - 5)
+                                                                                      : name;
 }
 
 skaar::RunTime Now() {
@@ -71,6 +73,9 @@ void LoadData() {
         std::string text, error;
         skaar::Scenario s;
         if (!trap::FileRead(skaar::Va("scenarios/%s", file.c_str()), text)) {
+            // listed but unreadable (permissions, a pure server): say so, don't drop it
+            d.scenarioErrors.emplace_back(id, "could not be read");
+            Com_Printf(S_COLOR_YELLOW "WARNING: scenarios/%s: could not be read\n", file.c_str());
             continue;
         }
         if (skaar::ParseScenario(id, text, s, error)) {
@@ -85,25 +90,54 @@ void LoadData() {
         return ra != rb ? ra < rb : a.category != b.category ? a.category < b.category : a.name < b.name;
     });
 
-    // weapon files: only checked here (the game modules load them); errors show next to the scenario list
+    // weapon files: the game modules load these too, so register what parses here as
+    // well (Insights › Arena charts skaar::Weapons()); errors show next to the scenario list
+    skaar::ResetWeapons();
     for (const std::string& file : trap::FileList("weapons", ".json")) {
+        const std::string id = StripJson(file);
         std::string text, error;
         skaar::WeaponDef w;
-        if (trap::FileRead(skaar::Va("weapons/%s", file.c_str()), text) &&
-            !skaar::ParseWeapon(StripJson(file), text, w, error)) {
-            d.scenarioErrors.emplace_back("weapons/" + StripJson(file), error);
+        if (!trap::FileRead(skaar::Va("weapons/%s", file.c_str()), text)) {
+            d.scenarioErrors.emplace_back("weapons/" + id, "could not be read");
+            Com_Printf(S_COLOR_YELLOW "WARNING: weapons/%s: could not be read\n", file.c_str());
+            continue;
+        }
+        if (skaar::ParseWeapon(id, text, w, error)) {
+            skaar::AddWeapon(w);
+        } else {
+            d.scenarioErrors.emplace_back("weapons/" + id, error);
         }
     }
 
     for (const std::string& file : trap::FileList("benchmarks", ".json")) {
+        const std::string id = StripJson(file);
         std::string text, error;
         skaar::Benchmark b;
-        if (trap::FileRead(skaar::Va("benchmarks/%s", file.c_str()), text) &&
-            skaar::ParseBenchmark(StripJson(file), text, b, error)) {
+        if (!trap::FileRead(skaar::Va("benchmarks/%s", file.c_str()), text)) {
+            d.benchmarkErrors.emplace_back(id, "could not be read");
+            Com_Printf(S_COLOR_YELLOW "WARNING: benchmarks/%s: could not be read\n", file.c_str());
+            continue;
+        }
+        if (skaar::ParseBenchmark(id, text, b, error)) {
             d.benchmarks.push_back(std::move(b));
-        } else if (!error.empty()) {
-            d.benchmarkErrors.emplace_back(StripJson(file), error);
+        } else {
+            d.benchmarkErrors.emplace_back(id, error);
             Com_Printf(S_COLOR_YELLOW "WARNING: benchmarks/%s: %s\n", file.c_str(), error.c_str());
+        }
+    }
+
+    // a benchmark may name a scenario this pack doesn't ship. Such an entry can never be
+    // played, so it would hold the focus pick (and leave the benchmark unranked) forever
+    for (skaar::Benchmark& b : d.benchmarks) {
+        for (auto it = b.entries.begin(); it != b.entries.end();) {
+            if (d.FindScenario(it->scenario)) {
+                ++it;
+                continue;
+            }
+            d.benchmarkErrors.emplace_back(b.id, "unknown scenario " + it->scenario);
+            Com_Printf(S_COLOR_YELLOW "WARNING: benchmarks/%s: unknown scenario '%s'\n", b.id.c_str(),
+                       it->scenario.c_str());
+            it = b.entries.erase(it);
         }
     }
 
