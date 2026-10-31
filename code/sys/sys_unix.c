@@ -107,10 +107,11 @@ static int Sys_Exec( void )
 		// Child
 		execvp( execArgv[ 0 ], execArgv );
 
-		// Failed to execute
-		exit( -1 );
+		// Failed to execute; 127 is the shell's "command not found", so
+		// Sys_Dialog can tell this from a dialog the user answered
+		_exit( 127 );
 
-		return -1;
+		return 127;
 	}
 }
 
@@ -1144,7 +1145,9 @@ dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *t
 			commands[ i ]( type, message, title );
 			exitCode = Sys_Exec( );
 
-			if( exitCode >= 0 )
+			// 127 means the dialog program never ran (no zenity/kdialog/xmessage
+			// installed): that is no answer, not a "No", so try the next one
+			if( exitCode >= 0 && exitCode != 127 )
 			{
 				switch( type )
 				{

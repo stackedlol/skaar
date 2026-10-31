@@ -49,6 +49,7 @@ void CON_Print( const char *message );
 unsigned int CON_LogSize( void );
 unsigned int CON_LogWrite( const char *in );
 unsigned int CON_LogRead( char *out, unsigned int outSize );
+unsigned int CON_LogPeek( char *out, unsigned int outSize );
 
 char *Sys_BinaryPath( void );
 // skaar: crash report writer (sys_crash.c)

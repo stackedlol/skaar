@@ -90,7 +90,8 @@ static void Crash_WriteCpu( int fd ) {
 }
 
 static void Crash_WriteLogTail( int fd ) {
-	unsigned int size = CON_LogRead( crashLogBuf, sizeof( crashLogBuf ) - 1 );
+	// peek: Sys_ErrorDialog still copies the same tail into crashlog.txt afterwards
+	unsigned int size = CON_LogPeek( crashLogBuf, sizeof( crashLogBuf ) - 1 );
 	const char *start;
 	int lines = 0;
 

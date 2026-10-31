@@ -2468,8 +2468,11 @@ void FS_GetModDescription( const char *modDir, char *description, int descriptio
 	if ( nDescLen > 0 ) {
 		file = FS_FileForHandle(descHandle);
 		Com_Memset( description, 0, descriptionLen );
-		nDescLen = fread(description, 1, descriptionLen, file);
-		if (nDescLen >= 0) {
+		// skaar: fread can return descriptionLen, and description[nDescLen] used
+		// to write one byte past the caller's buffer (Sys_InitPIDFile passes a
+		// PATH_MAX stack array). Leave room for the terminator.
+		if ( descriptionLen > 1 ) {
+			nDescLen = fread( description, 1, descriptionLen - 1, file );
 			description[nDescLen] = '\0';
 		}
 	} else {

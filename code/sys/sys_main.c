@@ -793,6 +793,57 @@ void Sys_SigHandler( int signal )
 
 /*
 =================
+Sys_InstallSignalHandlers
+
+skaar: the crash signals go through sigaction on an alternate stack, so the
+report is still written when the faulting stack is dead (stack overflow), and
+with SA_RESETHAND, so a fault inside the handler kills the process instead of
+retrying the faulting instruction with the signal blocked forever. The quit
+signals just need a clean exit and keep plain signal().
+=================
+*/
+static void Sys_InstallSignalHandlers( void )
+{
+	signal( SIGTERM, Sys_SigHandler );
+	signal( SIGINT, Sys_SigHandler );
+
+#if !defined( _WIN32 ) && !defined( __EMSCRIPTEN__ )
+	{
+		// SIGBUS and SIGABRT are installed by Sys_PlatformInit; taking them over
+		// here is the point (SIGABRT is what abort()/DEV_ASSERT deliver)
+		static const int crashSignals[] = { SIGILL, SIGFPE, SIGSEGV, SIGBUS, SIGABRT };
+		// backtrace() plus the report writer's buffers need more than the minimum
+		static char sigStack[ 64 * 1024 ];
+		struct sigaction sa;
+		stack_t ss;
+		size_t i;
+
+		ss.ss_sp = sigStack;
+		ss.ss_size = sizeof( sigStack );
+		ss.ss_flags = 0;
+		if( sigaltstack( &ss, NULL ) != 0 ) {
+			fprintf( stderr, "WARNING: couldn't set up the crash handler stack: %s\n",
+				strerror( errno ) );
+		}
+
+		Com_Memset( &sa, 0, sizeof( sa ) );
+		sa.sa_handler = Sys_SigHandler;
+		sa.sa_flags = SA_ONSTACK | SA_NODEFER | SA_RESETHAND;
+		sigemptyset( &sa.sa_mask );
+
+		for( i = 0; i < ARRAY_LEN( crashSignals ); i++ ) {
+			sigaction( crashSignals[ i ], &sa, NULL );
+		}
+	}
+#else
+	signal( SIGILL, Sys_SigHandler );
+	signal( SIGFPE, Sys_SigHandler );
+	signal( SIGSEGV, Sys_SigHandler );
+#endif
+}
+
+/*
+=================
 main
 =================
 */
@@ -900,11 +951,7 @@ int main( int argc, char **argv )
 	Com_Init( commandLine );
 	NET_Init( );
 
-	signal( SIGILL, Sys_SigHandler );
-	signal( SIGFPE, Sys_SigHandler );
-	signal( SIGSEGV, Sys_SigHandler );
-	signal( SIGTERM, Sys_SigHandler );
-	signal( SIGINT, Sys_SigHandler );
+	Sys_InstallSignalHandlers( );
 
 #ifdef __EMSCRIPTEN__
 	emscripten_set_main_loop( Com_Frame, 0, 1 );

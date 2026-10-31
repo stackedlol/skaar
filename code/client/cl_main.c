@@ -3179,8 +3179,8 @@ void CL_InitRenderer( void ) {
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.whiteShader = re.RegisterShader( "white" );
 	cls.consoleShader = re.RegisterShader( "console" );
-	g_console_field_width = cls.glconfig.vidWidth / g_smallchar_width - 2;
-	g_consoleField.widthInChars = g_console_field_width;
+	// g_console_field_width is set by Con_CheckResize, which is the only place
+	// that knows g_smallchar_width (con_scale/r_pixelRatio are not applied yet here)
 
 	// skaar: GPU string for crash reports, ignore the restart hitch
 	CL_DevOnRendererStarted();

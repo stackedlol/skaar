@@ -49,6 +49,10 @@ static SDL_Joystick *stick = NULL;
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
+#ifdef USE_RAW_MOUSE
+// skaar: whether the raw path should feed the game right now (in_nograb off)
+static qboolean rawMouseHeld = qfalse;
+#endif
 
 static cvar_t *in_mouse             = NULL;
 static cvar_t *in_nograb;
@@ -356,7 +360,7 @@ skaar: true when mouse motion comes from the raw path instead of SDL
 static qboolean IN_RawMouseInUse( void )
 {
 #ifdef USE_RAW_MOUSE
-	return in_rawMouse && in_rawMouse->integer && RawMouse_Active( );
+	return rawMouseHeld && in_rawMouse && in_rawMouse->integer && RawMouse_Active( );
 #else
 	return qfalse;
 #endif
@@ -409,9 +413,6 @@ static void IN_ActivateMouse( qboolean isFullscreen )
 		SDL_SetWindowGrab( SDL_window, SDL_TRUE );
 
 		IN_GobbleMotionEvents( );
-#ifdef USE_RAW_MOUSE
-		RawMouse_SetCapture( qtrue );
-#endif
 	}
 
 	// in_nograb makes no sense in fullscreen mode
@@ -430,6 +431,13 @@ static void IN_ActivateMouse( qboolean isFullscreen )
 			in_nograb->modified = qfalse;
 		}
 	}
+
+#ifdef USE_RAW_MOUSE
+	// skaar: follow the decision just made for SDL - with in_nograb the pointer
+	// is not captured, and raw device motion must not reach the game either
+	rawMouseHeld = isFullscreen || !in_nograb->integer;
+	RawMouse_SetCapture( rawMouseHeld );
+#endif
 
 	mouseActive = qtrue;
 }
@@ -450,12 +458,22 @@ static void IN_DeactivateMouse( qboolean isFullscreen )
 		SDL_ShowCursor( SDL_TRUE );
 
 	if( !mouseAvailable )
+	{
+#ifdef USE_RAW_MOUSE
+		// in_mouse 0 skips the block below, so the raw capture would stay armed
+		// (and its unconsumed counts would land in the game on the next restart)
+		rawMouseHeld = qfalse;
+		RawMouse_SetCapture( qfalse );
+#endif
+		mouseActive = qfalse;
 		return;
+	}
 
 	if( mouseActive )
 	{
 		IN_GobbleMotionEvents( );
 #ifdef USE_RAW_MOUSE
+		rawMouseHeld = qfalse;
 		RawMouse_SetCapture( qfalse );
 #endif
 

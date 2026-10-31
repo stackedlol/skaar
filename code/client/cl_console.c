@@ -297,6 +297,15 @@ void Con_CheckResize (void)
 
 	width = (cls.glconfig.vidWidth / g_smallchar_width) - 2;
 
+	// skaar: the input line is drawn with the same cell as the console text, so
+	// it has to follow g_smallchar_width too; CL_InitRenderer ran before
+	// con_scale was known and left it at the unscaled width
+	if (width >= 1 && g_console_field_width != width)
+	{
+		g_console_field_width = width;
+		g_consoleField.widthInChars = width;
+	}
+
 	if (width == con.linewidth)
 		return;
 

@@ -127,3 +127,21 @@ unsigned int CON_LogRead( char *out, unsigned int outSize )
 
 	return outSize;
 }
+
+/*
+==================
+CON_LogPeek
+
+Reads like CON_LogRead but keeps the read position, so a later reader still
+sees the same lines (the crash report and crashlog.txt both want the tail).
+==================
+*/
+unsigned int CON_LogPeek( char *out, unsigned int outSize )
+{
+	unsigned int savedPos = readPos;
+	unsigned int size = CON_LogRead( out, outSize );
+
+	readPos = savedPos;
+
+	return size;
+}

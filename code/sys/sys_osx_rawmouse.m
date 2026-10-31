@@ -104,6 +104,12 @@ void RawMouse_Shutdown( void ) {
 				mouse.mouseInput.mouseMovedHandler = nil;
 			}
 		}
+		// MRC: dispatch_queue_create returns +1, and Init creates a new queue
+		// on every vid_restart
+		if( handlerQueue ) {
+			dispatch_release( handlerQueue );
+			handlerQueue = NULL;
+		}
 	}
 	atomic_store( &miceAttached, 0 );
 	atomic_store( &capturing, 0 );

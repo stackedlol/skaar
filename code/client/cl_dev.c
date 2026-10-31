@@ -123,6 +123,14 @@ static void CL_DevDrawErrorPanel( const char *error ) {
 	int len = strlen( error ), pos;
 	char line[ 256 ];
 
+	// a window narrower than 8 character cells would make this negative, and it
+	// is the wrap width *and* the Q_strncpyz size below, which Com_Error()s fatally
+	if ( cols < 4 ) {
+		cols = 4;
+	} else if ( cols > (int)sizeof( line ) - 1 ) {
+		cols = (int)sizeof( line ) - 1;
+	}
+
 	CL_DevFill( 0, 0, w, h, colorErrorBg );
 	CL_DevText( x, y, "ERROR", colorErrorText, 1.0f );
 	y += lineH * 2;
