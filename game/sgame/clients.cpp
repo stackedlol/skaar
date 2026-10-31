@@ -3,6 +3,7 @@
 // the aim trainer doesn't need yet (items, damage, teams, bots).
 //
 // This file is part of Skaar. GPLv2 or later.
+#include <cmath>
 #include <cstring>
 
 #include "local.h"
@@ -125,6 +126,7 @@ void ClientDisconnect(int clientNum) {
     std::memset(&ent, 0, sizeof(ent));
     std::memset(&g_clients[clientNum], 0, sizeof(gclient_t));
     trap::SetConfigstring(CS_PLAYERS + clientNum, "");
+    mode::ClientDisconnect(clientNum);  // save the session log, then hand the slot over clean
     Com_DPrintf("sgame: client %d disconnected\n", clientNum);
 }
 
@@ -146,17 +148,31 @@ void ClientCommand(int clientNum) {
             if (trap::Argc() < 4) {
                 SendPrint(clientNum, "usage: setviewpos x y z [yaw]\n");
             } else {
-                gentity_t& ent = EntityFor(clientNum);
-                vec3_t angles = {0, static_cast<float>(atof(trap::Argv(4).c_str())), 0};
+                // atof reads "1e30" and "nan" happily, and neither survives what happens
+                // next: ANGLE2SHORT is (x * 65536 / 360) as an int, and the origin is
+                // snapped into the entity state. Reject both rather than truncate them
+                vec3_t origin, angles = {0, 0, 0};
+                bool finite = true;
                 for (int i = 0; i < 3; i++) {
-                    client.ps.origin[i] = static_cast<float>(atof(trap::Argv(i + 1).c_str()));
+                    origin[i] = static_cast<float>(atof(trap::Argv(i + 1).c_str()));
+                    finite = finite && std::isfinite(origin[i]) && std::fabs(origin[i]) <= kMaxCoord;
                 }
-                client.ps.origin[2] -= DEFAULT_VIEWHEIGHT;  // the arguments are the eye position, as viewpos prints
-                VectorClear(client.ps.velocity);
-                client.ps.eFlags ^= EF_TELEPORT_BIT;
-                SetViewAngles(client, ent, angles);
-                BG_PlayerStateToEntityState(&client.ps, &ent.s, qtrue);
-                trap::LinkEntity(&ent);
+                angles[YAW] = static_cast<float>(atof(trap::Argv(4).c_str()));
+                finite = finite && std::isfinite(angles[YAW]) && std::fabs(angles[YAW]) <= kMaxCoord;
+                if (!finite) {
+                    SendPrint(clientNum, "setviewpos: coordinates and yaw must be within -65535..65535\n");
+                } else {
+                    gentity_t& ent = EntityFor(clientNum);
+                    for (int i = 0; i < 3; i++) {
+                        client.ps.origin[i] = origin[i];
+                    }
+                    client.ps.origin[2] -= DEFAULT_VIEWHEIGHT;  // the arguments are the eye position, as viewpos prints
+                    VectorClear(client.ps.velocity);
+                    client.ps.eFlags ^= EF_TELEPORT_BIT;
+                    SetViewAngles(client, ent, angles);
+                    BG_PlayerStateToEntityState(&client.ps, &ent.s, qtrue);
+                    trap::LinkEntity(&ent);
+                }
             }
         }
     } else if (!Q_stricmp(cmd.c_str(), "sk_freeze")) {
@@ -169,8 +185,10 @@ void ClientCommand(int clientNum) {
         }
     } else if (!Q_stricmp(cmd.c_str(), "respawn") || !Q_stricmp(cmd.c_str(), "sk_restart")) {
         // sk_restart reaches the server only when the cgame trainer didn't handle it
-        // (no scenario loaded): fall back to a respawn
-        Spawn(clientNum);
+        // (no scenario loaded): fall back to a respawn. Respawn() and not Spawn(): it clears
+        // client.dead too, otherwise the next think put the fresh player back in PM_DEAD and
+        // the death's forced-respawn timer teleported them a second time.
+        Respawn(clientNum);
     } else if (!mode::ClientCommand(clientNum, cmd.c_str())) {
         SendPrint(clientNum, skaar::Va("unknown command: %s\n", cmd.c_str()));
     }
@@ -250,6 +268,10 @@ void ClientThink(int clientNum) {
     client.ps.stats[skaar::move::kStatRuleset] = level.ruleset;
 
     pmove_t pm{};
+    // Pmove only writes the box from CheckDuck(), which PM_FREEZE and PM_NOCLIP return before:
+    // seed it with the player's box so those pm_types don't collapse the entity to a point
+    VectorCopy(ent.r.mins, pm.mins);
+    VectorCopy(ent.r.maxs, pm.maxs);
     pm.ps = &client.ps;
     pm.cmd = ucmd;
     pm.tracemask = MASK_PLAYERSOLID;

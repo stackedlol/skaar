@@ -63,7 +63,8 @@ void FireHitscan(gentity_t* player, const skaar::WeaponDef& w, const vec3_t muzz
             counted = Damageable(hit);
         }
         if (Damageable(hit)) {
-            Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false));
+            Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false),
+                   w.knockback);
         }
         if (!(hit->r.contents & CONTENTS_BODY)) {
             break;
@@ -119,7 +120,8 @@ void FirePellets(gentity_t* player, const skaar::WeaponDef& w, const vec3_t muzz
             CountHit(player, w.slot, hit);
             counted = true;
         }
-        Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false));
+        Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false),
+               w.knockback);
     }
 }
 
@@ -134,7 +136,7 @@ void FireBeam(gentity_t* player, const skaar::WeaponDef& w, const vec3_t muzzle,
     }
     gentity_t* hit = &g_entities[tr.entityNum];
     CountHit(player, w.slot, hit);
-    Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false));
+    Damage(hit, player, player, forward, tr.endpos, static_cast<int>(w.damage), 0, ModFor(w, false), w.knockback);
 }
 
 // Tac hitscan: the spray pattern and a movement-dependent cone, deterministic
@@ -143,7 +145,12 @@ void FireBeam(gentity_t* player, const skaar::WeaponDef& w, const vec3_t muzzle,
 void FireTac(gentity_t* player, playerState_t& ps, const skaar::WeaponDef& w) {
     namespace arena = skaar::arena;
     const int now = ps.commandTime;
-    const int since = (now - ps.stats[arena::kStatLastShot]) & 0x7fff;
+    // kStatLastShot is networked as a signed 16-bit value, so the stat alone only knows the gap
+    // modulo 32768 ms: with a recoverMs of 32768 or more the spray never reset (the weapon
+    // stayed at its last shot for the rest of the map, and shot 0 never got its spread back),
+    // and a pause that wrapped aliased to a short one. Keep the real time server-side.
+    ClientState& cs = clients[player->s.number];
+    const int since = cs.lastShotMs ? now - cs.lastShotMs : 0;
     const bool reset = ps.stats[arena::kStatSpray] == 0 || since > w.recoilRecoverMs;
     const int index = reset ? 0 : ps.stats[arena::kStatSpray];
 
@@ -173,7 +180,8 @@ void FireTac(gentity_t* player, playerState_t& ps, const skaar::WeaponDef& w) {
             const bool head = tr.endpos[2] >= hit->r.absmax[2] - 12;
             const float dist = Distance(eye, tr.endpos);
             const float damage = w.damage * skaar::FalloffScale(w, dist) * (head ? w.headMultiplier : 1.0f);
-            Damage(hit, player, player, dir, tr.endpos, static_cast<int>(damage + 0.5f), 0, MOD_MACHINEGUN);
+            Damage(hit, player, player, dir, tr.endpos, static_cast<int>(damage + 0.5f), 0, MOD_MACHINEGUN,
+                   w.knockback);
         }
     }
     // a tracer from just below the eye to the impact
@@ -187,6 +195,7 @@ void FireTac(gentity_t* player, playerState_t& ps, const skaar::WeaponDef& w) {
 
     ps.stats[arena::kStatSpray] = std::min(index + 1, 32000);
     ps.stats[arena::kStatLastShot] = now & 0x7fff;
+    cs.lastShotMs = now;
 }
 
 void FireProjectile(gentity_t* player, const skaar::WeaponDef& w, const vec3_t muzzle, const vec3_t forward) {
@@ -230,7 +239,7 @@ void Explode(gentity_t* m, const trace_t* tr) {
             }
             vec3_t dir;
             VectorNormalize2(m->s.pos.trDelta, dir);
-            Damage(hit, m, owner, dir, origin, static_cast<int>(w->damage), 0, ModFor(*w, false));
+            Damage(hit, m, owner, dir, origin, static_cast<int>(w->damage), 0, ModFor(*w, false), w->knockback);
         }
     }
     if (w && w->splashDamage > 0) {
@@ -240,7 +249,7 @@ void Explode(gentity_t* m, const trace_t* tr) {
         if (tr) {
             VectorMA(at, 1, tr->plane.normal, at);
         }
-        RadiusDamage(at, owner, w->splashDamage, w->splashRadius, direct, ModFor(*w, true));
+        RadiusDamage(at, owner, w->splashDamage, w->splashRadius, direct, ModFor(*w, true), w->knockback);
     }
 
     vec3_t normal = {0, 0, 1};

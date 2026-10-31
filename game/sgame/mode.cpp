@@ -25,6 +25,12 @@ namespace {
 constexpr int kDamageRadius = 0x1;       // Q3 DAMAGE_* flags (g_local.h)
 constexpr int kDamageNoKnockback = 0x4;
 constexpr float kArmorProtection = 0.66f;
+// damage is an int the game does arithmetic on; anything past this is nonsense data, and
+// 2147483647 itself is not representable as a float, so the clamp value stays well inside int
+constexpr float kMaxDamage = 1.0e9f;
+// knockback scales the whole push (WeaponDef::knockback); the weapon parser accepts 0..100,
+// so the cap here has to be as wide or a "knockback": 50 pushes at a tenth of its value
+constexpr float kMaxKnockbackScale = 100.0f;
 
 void LoadWeapons() {
     skaar::ResetWeapons();
@@ -122,7 +128,7 @@ void WriteSession(int clientNum) {
     trap::RealTime(&t);
     s.when = {t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec};
     s.map = level.mapname;
-    s.ruleset = cvars.movement.string[0] ? cvars.movement.string : "vq3";
+    s.ruleset = skaar::move::RulesetAt(level.ruleset).id;  // what ran, not what g_movement asked for
     s.seconds = (level.time - cs.sessionStart) / 1000.0f;
     s.damageDealt = cs.damageDealt;
     s.damageTaken = cs.damageTaken;
@@ -151,7 +157,13 @@ bool KeyVector(const EntityKeys& keys, const char* key, vec3_t out) {
         return false;
     }
     std::istringstream in(it->second);
-    return static_cast<bool>(in >> out[0] >> out[1] >> out[2]);
+    if (!(in >> out[0] >> out[1] >> out[2])) {
+        return false;
+    }
+    // items and dummies are linked and snapped like the spawn points: a "1e30 0 40" origin
+    // is UB in the entity-delta writer and in the client's lightgrid lookup
+    ClampCoords(out);
+    return true;
 }
 
 gentity_t* TempEvent(const vec3_t origin, int event, int eventParm) {
@@ -197,7 +209,8 @@ bool Damageable(const gentity_t* ent) {
     return st.kind == EntState::Kind::kDummy && st.deadUntil == 0;
 }
 
-void RadiusDamage(const vec3_t origin, gentity_t* attacker, float damage, float radius, gentity_t* ignore, int mod) {
+void RadiusDamage(const vec3_t origin, gentity_t* attacker, float damage, float radius, gentity_t* ignore, int mod,
+                  float knockbackScale) {
     if (radius < 1) {
         return;
     }
@@ -236,8 +249,11 @@ void RadiusDamage(const vec3_t origin, gentity_t* attacker, float damage, float 
         vec3_t dir;
         VectorSubtract(ent->r.currentOrigin, origin, dir);
         dir[2] += 24;  // push the centre of mass higher, so players go up more
-        Damage(ent, nullptr, attacker, dir, origin, static_cast<int>(damage * (1.0f - dist / radius)), kDamageRadius,
-               mod);
+        // the weapon parser bounds splashDamage only from below, and a float->int conversion
+        // outside int's range is UB (INT_MIN here, INT_MAX there), so saturate first
+        const float scaled = damage * (1.0f - dist / radius);
+        const int take = static_cast<int>(std::clamp(std::isfinite(scaled) ? scaled : 0.0f, 0.0f, kMaxDamage));
+        Damage(ent, nullptr, attacker, dir, origin, take, kDamageRadius, mod, knockbackScale);
     }
 }
 
@@ -292,6 +308,12 @@ void RunFrame(int /*levelTime*/) {
     }
     RunEntities();
     Decay();
+}
+
+void ClientDisconnect(int clientNum) {
+    // the slot is about to be handed to the next player, and WriteSession clears it:
+    // without this the newcomer inherited these stats and the old sessionStart
+    WriteSession(clientNum);
 }
 
 void ClientSpawn(int clientNum, playerState_t& ps) {
@@ -405,9 +427,11 @@ bool SpawnEntity(const char* classname, const EntityKeys& keys) {
             }
         }
         if (auto it = keys.find("ruleset"); it != keys.end()) {
-            std::string text;
-            if (skaar::move::FindRuleset(it->second) >= 0 ||
-                trap::FileRead(skaar::Va("rulesets/%s.json", it->second.c_str()), text)) {
+            // the registry is the only authority: LoadRulesets ran before the entity lump, so
+            // an id that is merely a file on disk is one that failed to parse. Accepting it
+            // would make g_movement point at a ruleset that cannot run (vq3 is silently
+            // substituted) and archive that name into the player's config.
+            if (skaar::move::FindRuleset(it->second) >= 0) {
                 trap::CvarSet("g_movement", it->second.c_str());
             } else {
                 Com_Printf(S_COLOR_YELLOW "WARNING: info_loadout: unknown ruleset '%s'\n", it->second.c_str());
@@ -425,15 +449,18 @@ void Touch(gentity_t* trigger, gentity_t* player) {
 }
 
 void Damage(gentity_t* target, gentity_t* inflictor, gentity_t* attacker, const vec3_t dir, const vec3_t point,
-            int damage, int dflags, int mod) {
+            int damage, int dflags, int mod, float knockbackScale) {
     (void)inflictor;
     (void)point;
     (void)mod;
     if (!Damageable(target) || damage <= 0) {
         return;
     }
+    // a per-weapon scale is bounded by the parser (0..100); a non-finite or huge one would
+    // land in ps.velocity (then in the snapped entity origin), so bound it here too
+    knockbackScale = std::isfinite(knockbackScale) ? std::clamp(knockbackScale, 0.0f, kMaxKnockbackScale) : 1.0f;
     if (!target->client) {
-        DamageDummy(target, attacker, dir, damage, dflags);
+        DamageDummy(target, attacker, dir, damage, dflags, knockbackScale);
         return;
     }
 
@@ -453,7 +480,7 @@ void Damage(gentity_t* target, gentity_t* inflictor, gentity_t* attacker, const 
     }
     if (knockback && ps.pm_type == PM_NORMAL) {
         vec3_t kvel;
-        VectorScale(d, mcv.knockback.value * static_cast<float>(knockback) / 200.0f, kvel);
+        VectorScale(d, mcv.knockback.value * knockbackScale * static_cast<float>(knockback) / 200.0f, kvel);
         VectorAdd(ps.velocity, kvel, ps.velocity);
         if (!ps.pm_time) {
             ps.pm_time = std::clamp(knockback * 2, 50, 200);

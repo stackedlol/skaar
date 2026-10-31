@@ -2,6 +2,7 @@
 // (trigger_push + target_position). Everything else is logged and ignored.
 //
 // This file is part of Skaar. GPLv2 or later.
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
@@ -45,6 +46,7 @@ void ReadVector(const EntityKeys& keys, const char* key, vec3_t out) {
     auto it = keys.find(key);
     if (it != keys.end()) {
         std::sscanf(it->second.c_str(), "%f %f %f", &out[0], &out[1], &out[2]);
+        ClampCoords(out);
     }
 }
 
@@ -113,7 +115,9 @@ void SpawnPlayerStart(const EntityKeys& keys) {
     ReadVector(keys, "origin", spot.origin);
     auto angle = keys.find("angle");
     if (angle != keys.end()) {
-        spot.angles[YAW] = static_cast<float>(std::atof(angle->second.c_str()));
+        // wrapping at 360 keeps the value small enough for ANGLE2SHORT's int conversion
+        const float yaw = static_cast<float>(std::atof(angle->second.c_str()));
+        spot.angles[YAW] = std::isfinite(yaw) ? std::fmod(yaw, 360.0f) : 0;
     }
     level.spawns.push_back(spot);
 }

@@ -55,6 +55,7 @@ struct ClientState {
     int kills = 0;
     int deaths = 0;
     std::array<int, 16> reserve{};  // tac weapons: rounds outside the magazine, per slot
+    int lastShotMs = 0;      // command time of the last shot, unmasked (kStatLastShot is 16-bit)
     bool inSession = false;  // spawned on an arena map; written to stats/arena.jsonl at shutdown
     int sessionStart = 0;
 };
@@ -81,7 +82,8 @@ inline EntState& StateOf(const gentity_t* ent) { return ents[ent->s.number]; }
 gentity_t* TempEvent(const vec3_t origin, int event, int eventParm = 0);  // an ET_EVENTS entity
 void AddEvent(gentity_t* ent, int event, int eventParm);                 // on a client or arena entity
 bool Damageable(const gentity_t* ent);
-void RadiusDamage(const vec3_t origin, gentity_t* attacker, float damage, float radius, gentity_t* ignore, int mod);
+void RadiusDamage(const vec3_t origin, gentity_t* attacker, float damage, float radius, gentity_t* ignore, int mod,
+                  float knockbackScale);
 void GiveWeapon(playerState_t& ps, int slot, bool select);
 
 // weapons_fire.cpp
@@ -98,7 +100,7 @@ void RunItem(gentity_t* ent);
 // dummies.cpp
 bool SpawnDummy(const EntityKeys& keys);
 void RunDummy(gentity_t* ent);
-void DamageDummy(gentity_t* ent, gentity_t* attacker, const vec3_t dir, int damage, int dflags);
+void DamageDummy(gentity_t* ent, gentity_t* attacker, const vec3_t dir, int damage, int dflags, float knockbackScale);
 
 // "x y z" from a map entity key
 bool KeyVector(const EntityKeys& keys, const char* key, vec3_t out);

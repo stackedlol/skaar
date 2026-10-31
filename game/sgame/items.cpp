@@ -50,8 +50,13 @@ void TouchItem(gentity_t* e, gentity_t* player) {
         case arena::ItemType::kWeapon: {
             const bool had = ps.stats[STAT_WEAPONS] & (1 << def.slot);
             const int ammoBefore = ps.ammo[def.slot];
+            // a magazine weapon keeps the magazine in ps.ammo and the rest in the reserve, and
+            // touching it again only tops the reserve up: without that comparison a full
+            // magazine made the pickup untouched and re-usable for free reserve ammo
+            int& reserve = clients[player->s.number].reserve[def.slot];
+            const int reserveBefore = reserve;
             GiveWeapon(ps, def.slot, false);
-            taken = !had || ps.ammo[def.slot] != ammoBefore;
+            taken = !had || ps.ammo[def.slot] != ammoBefore || reserve != reserveBefore;
             break;
         }
         case arena::ItemType::kAmmo: {

@@ -3,7 +3,9 @@
 // This file is part of Skaar. GPLv2 or later.
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <map>
 #include <string>
 #include <vector>
@@ -15,6 +17,18 @@ namespace sg {
 struct gclient_t;
 
 using EntityKeys = std::map<std::string, std::string>;  // a map entity's key/value pairs
+
+// Entity coordinates come from the map's entity lump (mapc writes JSON numbers into it
+// verbatim), and they end up in int conversions: SnapVector truncates the origin,
+// ANGLE2SHORT converts the yaw. Both are UB outside int's range, so a value the map cannot
+// legitimately mean is clamped away where it is read.
+constexpr float kMaxCoord = 65535;  // MAX_MAP_BOUNDS (cm_polylib.h), far past any real map
+
+inline void ClampCoords(vec3_t v) {
+    for (int i = 0; i < 3; i++) {
+        v[i] = std::isfinite(v[i]) ? std::clamp(v[i], -kMaxCoord, kMaxCoord) : 0;
+    }
+}
 
 // The engine reads the leading entityState_t + entityShared_t of every
 // entity (sharedEntity_t), so those two must stay first and in this order.

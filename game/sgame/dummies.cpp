@@ -184,7 +184,8 @@ void RunDummy(gentity_t* e) {
     trap::LinkEntity(e);
 }
 
-void DamageDummy(gentity_t* e, gentity_t* attacker, const vec3_t dir, int damage, int /*dflags*/) {
+void DamageDummy(gentity_t* e, gentity_t* attacker, const vec3_t dir, int damage, int /*dflags*/,
+                 float knockbackScale) {
     EntState& st = StateOf(e);
     if (attacker && attacker->client) {
         attacker->client->ps.persistant[PERS_HITS]++;
@@ -196,7 +197,7 @@ void DamageDummy(gentity_t* e, gentity_t* attacker, const vec3_t dir, int damage
         VectorCopy(dir, d);
         VectorNormalize(d);
         const float knock = static_cast<float>(std::min(damage, 200));
-        VectorMA(st.velocity, mcv.knockback.value * knock / 200.0f, d, st.velocity);
+        VectorMA(st.velocity, mcv.knockback.value * knockbackScale * knock / 200.0f, d, st.velocity);
         if (st.velocity[2] > 0) {
             st.onGround = false;
         }
