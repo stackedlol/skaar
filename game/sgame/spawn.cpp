@@ -125,6 +125,11 @@ gentity_t* Spawn() {
         if (!g_entities[i].inuse) {
             g_entities[i] = gentity_t{};
             g_entities[i].s.number = i;
+            // value-initialising sets ownerNum to 0, which is a real client number:
+            // SV_ClipMoveToEntities skips any entity whose ownerNum matches the
+            // trace's pass or owner entity, so every trace would hit nothing.
+            // Q3's G_InitGentity stamps the same value.
+            g_entities[i].r.ownerNum = ENTITYNUM_NONE;
             g_entities[i].inuse = true;
             return &g_entities[i];
         }
@@ -135,6 +140,7 @@ gentity_t* Spawn() {
     gentity_t* ent = &g_entities[level.numEntities++];
     *ent = gentity_t{};
     ent->s.number = static_cast<int>(ent - g_entities.data());
+    ent->r.ownerNum = ENTITYNUM_NONE;  // see above: 0 would be "owned by client 0"
     ent->inuse = true;
     LinkGameData();  // the engine needs the new entity count
     return ent;

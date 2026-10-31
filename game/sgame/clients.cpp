@@ -62,6 +62,9 @@ void Spawn(int clientNum) {
     ent.classname = "player";
     ent.r.contents = CONTENTS_BODY;
     ent.r.svFlags = 0;
+    // not ENTITYNUM_NONE here and traces skip us: the engine drops every entity whose
+    // ownerNum equals the trace's pass or owner entity, and a player is nobody's owner
+    ent.r.ownerNum = ENTITYNUM_NONE;
     VectorCopy(kPlayerMins, ent.r.mins);
     VectorCopy(kPlayerMaxs, ent.r.maxs);
     VectorCopy(origin, ent.r.currentOrigin);
