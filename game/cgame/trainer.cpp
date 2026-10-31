@@ -50,7 +50,7 @@ enum class Phase {
 };
 
 struct Cvars {
-    vmCvar_t scenario, dpi, sensitivity, mYaw;
+    vmCvar_t scenario, dpi, dpiLegacy, sensitivity, mYaw;
     vmCvar_t chStyle, chSize, chGap, chThickness, chColor, chOutline, hitSound, volumeHint;
 };
 
@@ -63,7 +63,8 @@ struct State {
     TrainerSim sim;
     skaar::Vec3 anchor;
     float baseYaw = 0;
-    bool anchored = false;
+    bool waitingSpawn = false;  // a respawn was sent: anchor on the command that sees it land
+    int spawnEFlags = 0;        // ps.eFlags when it was sent; the server's Spawn() toggles EF_TELEPORT_BIT
     uint32_t seed = 1;
 
     int countdownEnd = 0;     // cg.time the run starts
@@ -85,8 +86,6 @@ struct State {
     RunRecord replay;
     int replayStart = 0;
     size_t replayKill = 0, replayShot = 0;
-    vec3_t replayOrigin{};
-    vec3_t replayAngles{};
 
     qhandle_t model = 0, shader = 0;
     sfxHandle_t hitSound = 0, killSound = 0, gunSound = 0;
@@ -98,7 +97,13 @@ Cvars cv;
 
 void RegisterCvars() {
     trap::CvarRegister(&cv.scenario, "sk_scenario", "", CVAR_ARCHIVE);
-    trap::CvarRegister(&cv.dpi, "sk_dpi", "800", CVAR_ARCHIVE);
+    // sens_dpi is the cvar docs/feel.md documents and sens_test divides by; the aim
+    // screens read it too. Its default is 0 = unset, so the record falls back to 800.
+    trap::CvarRegister(&cv.dpi, "sens_dpi", "0", CVAR_ARCHIVE);
+    // sk_dpi is what the aim screens wrote before they moved to sens_dpi (game/ui);
+    // read it as a fallback so a record is right whichever order the two land in.
+    // Not archived: it only mirrors a value the UI owns.
+    trap::CvarRegister(&cv.dpiLegacy, "sk_dpi", "0", 0);
     trap::CvarRegister(&cv.sensitivity, "sensitivity", "2", CVAR_ARCHIVE);
     trap::CvarRegister(&cv.mYaw, "m_yaw", "0.022", CVAR_ARCHIVE);
     namespace rd = skaar::ui::reticle_defaults;
@@ -112,13 +117,24 @@ void RegisterCvars() {
 }
 
 void UpdateCvars() {
-    for (vmCvar_t* c : {&cv.scenario, &cv.dpi, &cv.sensitivity, &cv.mYaw, &cv.chStyle, &cv.chSize, &cv.chGap,
+    for (vmCvar_t* c : {&cv.scenario, &cv.dpi, &cv.dpiLegacy, &cv.sensitivity, &cv.mYaw, &cv.chStyle, &cv.chSize, &cv.chGap,
                         &cv.chThickness, &cv.chColor, &cv.chOutline, &cv.hitSound}) {
         trap::CvarUpdate(c);
     }
 }
 
-float CmPer360() { return skaar::sens::CmPer360(cv.sensitivity.value, cv.mYaw.value, cv.dpi.value); }
+float CmPer360() {
+    // 0 = unset everywhere: sens_dpi first (documented), then the screens' older
+    // sk_dpi, then the 800 the aim screens also assume when nothing is set
+    float dpi = cv.dpi.value;
+    if (!(dpi > 0)) {
+        dpi = cv.dpiLegacy.value;
+    }
+    if (!(dpi > 0)) {
+        dpi = 800;
+    }
+    return skaar::sens::CmPer360(cv.sensitivity.value, cv.mYaw.value, dpi);
+}
 
 skaar::RunTime Now() {
     qtime_t t{};
@@ -211,12 +227,23 @@ void Restart() {
         trap::SendConsoleCommand(skaar::Va("map %s\n", st.scenario.map.c_str()));
         return;
     }
-    trap::SendClientCommand("respawn");
-    if (st.anchored) {
-        BeginRun();
-    } else {
-        st.phase = Phase::kWaitSpawn;
+    // One respawn at a time: Spawn() only toggles EF_TELEPORT_BIT, so two respawns in
+    // flight flip it twice and the anchor never sees one land (sk_restart;sk_restart on
+    // one line). The restart already in flight does what this one would ask for.
+    if (st.waitingSpawn) {
+        return;
     }
+    // Always take the anchor from the spawn the server actually gives us: a
+    // restart can happen with the player frozen anywhere on the map, and on a
+    // map with several spawn points it is not the one we last anchored at.
+    // The respawn travels as a client command, so the anchor is not known yet
+    // (see OnCommand).
+    st.waitingSpawn = cg.snap != nullptr;  // before the first snapshot there is no respawn to wait for
+    if (cg.snap) {
+        st.spawnEFlags = cg.snap->ps.eFlags;
+    }
+    st.phase = Phase::kWaitSpawn;
+    trap::SendClientCommand("respawn");
 }
 
 void Stop() {
@@ -300,8 +327,29 @@ bool StartReplay(const std::string& file) {
     return true;
 }
 
+// How far into the recorded run the replay is, in seconds.
+float ReplayTime() { return (cg.time - st.replayStart) / 1000.0f; }
+
+// The recorded camera at time t: the view samples around it, interpolated.
+// Read from OverrideView rather than stored by AdvanceReplay: the view for a
+// frame is built before AddEntities runs, so the camera has to be computed
+// where it is needed (see OverrideView).
+void ReplayCamera(float t, vec3_t origin, vec3_t angles) {
+    const auto& s = st.replay.samples;
+    auto it = std::lower_bound(s.begin(), s.end(), t, [](const skaar::ViewSample& v, float x) { return v.t < x; });
+    const skaar::ViewSample& b = it == s.end() ? s.back() : *it;
+    const skaar::ViewSample& a = it == s.begin() ? b : *(it - 1);
+    const float k = b.t > a.t ? std::clamp((t - a.t) / (b.t - a.t), 0.0f, 1.0f) : 0;
+    angles[YAW] = a.yaw + skaar::AngleDelta(b.yaw, a.yaw) * k;
+    angles[PITCH] = -(a.pitch + (b.pitch - a.pitch) * k);
+    angles[ROLL] = 0;
+    origin[0] = a.x + (b.x - a.x) * k;
+    origin[1] = a.y + (b.y - a.y) * k;
+    origin[2] = a.z + (b.z - a.z) * k;
+}
+
 void AdvanceReplay() {
-    const float t = (cg.time - st.replayStart) / 1000.0f;
+    const float t = ReplayTime();
     const auto& kills = st.replay.kills;
     const auto& shots = st.replay.shots;
     // apply recorded events in time order, so spawns draw from the RNG as they did
@@ -322,21 +370,6 @@ void AdvanceReplay() {
         st.replayShot++;
     }
     st.sim.Advance(t);
-
-    // camera: interpolate the samples around t
-    const auto& s = st.replay.samples;
-    auto it = std::lower_bound(s.begin(), s.end(), t, [](const skaar::ViewSample& v, float x) { return v.t < x; });
-    const skaar::ViewSample& b = it == s.end() ? s.back() : *it;
-    const skaar::ViewSample& a = it == s.begin() ? b : *(it - 1);
-    const float k = b.t > a.t ? std::clamp((t - a.t) / (b.t - a.t), 0.0f, 1.0f) : 0;
-    const float yaw = a.yaw + skaar::AngleDelta(b.yaw, a.yaw) * k;
-    const float pitch = a.pitch + (b.pitch - a.pitch) * k;
-    st.replayAngles[YAW] = yaw;
-    st.replayAngles[PITCH] = -pitch;
-    st.replayAngles[ROLL] = 0;
-    st.replayOrigin[0] = a.x + (b.x - a.x) * k;
-    st.replayOrigin[1] = a.y + (b.y - a.y) * k;
-    st.replayOrigin[2] = a.z + (b.z - a.z) * k;
 
     if (t > st.replay.summary.duration + 1.5f) {
         st.phase = Phase::kOff;
@@ -374,7 +407,9 @@ void ReplayNumbers(float* score, float* accuracy) {
     }
     *accuracy = n > 0 ? static_cast<float>(hits) / n : 0;
     const auto& sc = st.scenario.score;
-    if (st.scenario.fire == skaar::FireMode::kHold) {
+    // as the summary and the sim itself: a hold scenario with a weapon fires like a
+    // click run, and only a bare hold target has time on target to score
+    if (st.scenario.fire == skaar::FireMode::kHold && !st.sim.HasWeapon()) {
         // aim samples are 20 Hz while firing: each hit sample is ~0.05 s on target
         *score = hits * 0.05f * sc.perSecondOnTarget + st.sim.Kills() * sc.kill;
     } else {
@@ -432,7 +467,9 @@ void DrawSummary() {
     const kit::Fonts& f = kit::GetFonts();
     const RunSummary& s = st.last->summary;
     const float w = kit::Width(), h = kit::Height(), m = theme::kMargin;
-    const bool hold = st.scenario.fire == skaar::FireMode::kHold;
+    // The sim only tracks time on target for a hold scenario with no weapon: one
+    // with a weapon fires like a click scenario, so it must show the click cells.
+    const bool hold = st.scenario.fire == skaar::FireMode::kHold && !st.sim.HasWeapon();
 
     kit::Fill(0, 0, w, h, theme::kStage.Alpha(0.86f));
 
@@ -607,11 +644,15 @@ void OnCommand(const usercmd_t& cmd, const playerState_t& ps) {
     const skaar::Vec3 eye{ps.origin[0], ps.origin[1], ps.origin[2] + ps.viewheight};
     const float yaw = ps.viewangles[YAW], pitch = -ps.viewangles[PITCH];
 
-    if (st.phase == Phase::kWaitSpawn) {
-        // the first command after the map loads: the player stands at the spawn
+    // A respawn asked for by Restart() lands a frame or two later; until then the
+    // eye is still the one from before it. The server's Spawn() toggles
+    // EF_TELEPORT_BIT, so the flip is the signal that the player is at the spawn.
+    const bool spawned = !st.waitingSpawn || ((ps.eFlags ^ st.spawnEFlags) & EF_TELEPORT_BIT) != 0;
+    if (st.phase == Phase::kWaitSpawn && spawned) {
+        // the first command after the spawn: the player stands at the spawn
+        st.waitingSpawn = false;
         st.anchor = eye;
         st.baseYaw = std::round(ps.viewangles[YAW]);
-        st.anchored = true;
         if (!st.replay.summary.file.empty() && st.replay.samples.empty()) {
             const std::string file = st.replay.summary.file;
             st.replay = RunRecord{};
@@ -814,8 +855,7 @@ void OverrideView(vec3_t origin, vec3_t angles) {
     if (st.phase != Phase::kReplay) {
         return;
     }
-    VectorCopy(st.replayOrigin, origin);
-    VectorCopy(st.replayAngles, angles);
+    ReplayCamera(ReplayTime(), origin, angles);
 }
 
 }  // namespace cg::trainer

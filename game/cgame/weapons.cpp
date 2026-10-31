@@ -478,10 +478,10 @@ void PlayerEvent(int event, int /*eventParm*/, const playerState_t& ps) {
 }
 
 void DrawHud() {
-    HitBeep();
+    HitBeep();  // hit feedback stays on with the HUD hidden
     const playerState_t& ps = cg.predicted;
-    if (!ps.stats[STAT_WEAPONS] || (trap::Key_GetCatcher() & KEYCATCH_UI)) {
-        return;  // no arena loadout (the trainer, free roam): nothing to show
+    if (!cvars.drawHud.integer || !ps.stats[STAT_WEAPONS] || (trap::Key_GetCatcher() & KEYCATCH_UI)) {
+        return;  // HUD off, no arena loadout (the trainer, free roam), or a menu: nothing to show
     }
     const kit::Fonts& f = kit::GetFonts();
     const float w = kit::Width(), h = kit::Height(), m = theme::kMargin / 2;
@@ -501,7 +501,10 @@ void DrawHud() {
 
     // current weapon and ammo, bottom right
     if (const skaar::WeaponDef* cur = skaar::WeaponBySlot(ps.weapon)) {
-        const int ammo = ps.ammo[ps.weapon];
+        // ps.ammo travels as signed 16-bit (msg.c), so a weapon file with an
+        // ammo.max above 32767 arrives negative: the low 16 bits are still the
+        // count itself, up to 65535. -1 is sv_infiniteAmmo's marker, not a wrap.
+        const int ammo = ps.ammo[ps.weapon] == -1 ? -1 : (ps.ammo[ps.weapon] & 0xffff);
         float right = w - m;
         if (cur->magazine > 0) {
             // magazine weapons: rounds in the magazine, the reserve beside it
