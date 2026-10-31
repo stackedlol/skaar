@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
+#include <type_traits>
 
 #include "json.hpp"
 
@@ -69,10 +71,44 @@ std::vector<WeaponDef>& Registry() {
     return weapons;
 }
 
+// A JSON number as a float. Checked while it is still a double: narrowing an
+// out-of-float-range value is UB, and the value would only be rejected later.
+float Float(const json& node, const char* what) {
+    const double d = node.get<double>();
+    if (!std::isfinite(d) || std::fabs(d) > static_cast<double>(std::numeric_limits<float>::max())) {
+        throw std::runtime_error(std::string(what) + " is out of range");
+    }
+    return static_cast<float>(d);
+}
+
 template <typename T>
 T Get(const json& j, const char* key, T fallback) {
     auto it = j.find(key);
-    return it != j.end() && !it->is_null() ? it->get<T>() : fallback;
+    if (it == j.end() || it->is_null()) {
+        return fallback;
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        return static_cast<T>(Float(*it, key));
+    } else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
+        if (!it->is_number()) {
+            throw std::runtime_error(std::string(key) + " must be a number");
+        }
+        // get<int>() narrows with no range test: UB for an out-of-range number and
+        // a silent truncation for a fractional one. A float is still a whole number
+        // when it is exactly integral -- a hand-written file spells 4 as 4.0 and
+        // nlohmann used to truncate it -- so only a genuine fraction is rejected.
+        const double d = it->get<double>();
+        if (!std::isfinite(d) || std::trunc(d) != d) {
+            throw std::runtime_error(std::string(key) + " must be a whole number");
+        }
+        if (d < static_cast<double>(std::numeric_limits<T>::min()) ||
+            d > static_cast<double>(std::numeric_limits<T>::max())) {
+            throw std::runtime_error(std::string(key) + " is out of range");
+        }
+        return static_cast<T>(d);
+    } else {
+        return it->get<T>();
+    }
 }
 
 }  // namespace
@@ -80,6 +116,9 @@ T Get(const json& j, const char* key, T fallback) {
 bool ParseWeapon(std::string_view id, std::string_view text, WeaponDef& out, std::string& error) {
     try {
         const json j = json::parse(text.begin(), text.end(), nullptr, true, true);
+        if (!j.is_object()) {
+            throw std::runtime_error("a weapon file must be a JSON object");
+        }
         // start from the built-in with this id, so a file only needs what it changes
         WeaponDef w;
         for (const WeaponDef& b : BuiltIns()) {
@@ -124,13 +163,18 @@ bool ParseWeapon(std::string_view id, std::string_view text, WeaponDef& out, std
         w.crouchScale = Get<float>(j, "crouchScale", w.crouchScale);
         w.headMultiplier = Get<float>(j, "headMultiplier", w.headMultiplier);
         if (j.contains("falloff")) {
-            const auto f = j.at("falloff").get<std::vector<float>>();
-            if (f.size() != 3 || f[0] < 0 || f[1] <= f[0] || f[2] < 0 || f[2] > 1) {
+            const json& f = j.at("falloff");
+            if (!f.is_array() || f.size() != 3) {
                 throw std::runtime_error("falloff must be [start, end, minScale] with start < end, 0 <= minScale <= 1");
             }
-            w.falloffStart = f[0];
-            w.falloffEnd = f[1];
-            w.falloffMin = f[2];
+            const float start = Float(f[0], "falloff"), end = Float(f[1], "falloff");
+            const float minScale = Float(f[2], "falloff");
+            if (start < 0 || end <= start || minScale < 0 || minScale > 1) {
+                throw std::runtime_error("falloff must be [start, end, minScale] with start < end, 0 <= minScale <= 1");
+            }
+            w.falloffStart = start;
+            w.falloffEnd = end;
+            w.falloffMin = minScale;
         }
         w.magazine = Get<int>(j, "magazine", w.magazine);
         w.reloadMs = Get<int>(j, "reloadMs", w.reloadMs);
@@ -138,20 +182,29 @@ bool ParseWeapon(std::string_view id, std::string_view text, WeaponDef& out, std
             const json& r = j.at("recoil");
             w.recoil.clear();
             for (const json& kick : r.at("pattern")) {
-                w.recoil.push_back({kick.at(0).get<float>(), kick.at(1).get<float>()});
+                w.recoil.push_back({Float(kick.at(0), "recoil.pattern"), Float(kick.at(1), "recoil.pattern")});
             }
             w.recoilRecoverMs = Get<int>(r, "recoverMs", w.recoilRecoverMs);
             w.cameraFollow = Get<float>(r, "cameraFollow", w.cameraFollow);
-            if (w.recoil.size() > 256 || w.cameraFollow < 0 || w.cameraFollow > 1) {
-                throw std::runtime_error("recoil: at most 256 kicks, cameraFollow 0..1");
+            // the modules keep the pause in 15 bits, so a longer one can never reset
+            // the spray, and a negative one resets it on every shot
+            if (w.recoil.size() > 256 || w.cameraFollow < 0 || w.cameraFollow > 1 || w.recoilRecoverMs < 0 ||
+                w.recoilRecoverMs > 32767) {
+                throw std::runtime_error("recoil: at most 256 kicks, cameraFollow 0..1, recoverMs 0..32767");
             }
         }
         if (w.magazine < 0 || w.magazine > 1000 || w.reloadMs < 0 || w.reloadMs > 10000) {
             throw std::runtime_error("magazine must be 0..1000 and reloadMs 0..10000");
         }
-        if (w.inaccuracy < 0 || w.firstShotSpread < 0 || w.moveInaccuracy < 0 || w.airInaccuracy < 0 ||
-            w.moveSpeedRef <= 0 || w.headMultiplier < 1) {
-            throw std::runtime_error("bad inaccuracy / headMultiplier values");
+        // bounded both ways: a huge cone reaches the view-angle maths and turns it NaN
+        auto bad = [](float v, float lo, float hi) { return v < lo || v > hi; };
+        if (bad(w.inaccuracy, 0, 180) || bad(w.firstShotSpread, 0, 180) || bad(w.moveInaccuracy, 0, 180) ||
+            bad(w.airInaccuracy, 0, 180) || bad(w.moveSpeedRef, 1, 2000) || bad(w.crouchScale, 0, 1) ||
+            bad(w.spread, 0, 20000) || bad(w.knockback, 0, 100)) {
+            throw std::runtime_error("bad inaccuracy / moveSpeedRef / crouchScale values");
+        }
+        if (bad(w.headMultiplier, 1, 100)) {
+            throw std::runtime_error("headMultiplier must be 1..100");
         }
         if (j.contains("ammo")) {
             const json& a = j.at("ammo");
@@ -163,8 +216,10 @@ bool ParseWeapon(std::string_view id, std::string_view text, WeaponDef& out, std
         if (w.slot < 1 || w.slot > 15) {
             throw std::runtime_error("slot must be 1..15 (a WP_* number)");
         }
-        if (w.damage < 0 || w.splashDamage < 0 || w.splashRadius < 0) {
-            throw std::runtime_error("damage values must be >= 0");
+        // the damage path does static_cast<int>(damage * headMultiplier), so the product
+        // has to stay inside int as well as float
+        if (bad(w.damage, 0, 10000) || bad(w.splashDamage, 0, 10000) || bad(w.splashRadius, 0, 10000)) {
+            throw std::runtime_error("damage values must be 0..10000");
         }
         if (w.refireMs < 10 || w.refireMs > 10000) {
             throw std::runtime_error("refireMs must be 10..10000");

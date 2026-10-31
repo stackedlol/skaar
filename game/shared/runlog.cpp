@@ -1,8 +1,13 @@
 // This file is part of Skaar. GPLv2 or later.
 #include "runlog.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <type_traits>
 
 #include "json.hpp"
 
@@ -11,14 +16,22 @@ namespace {
 
 using json = nlohmann::json;
 
-// Howard Hinnant's days_from_civil
-int64_t DaysFromCivil(int y, unsigned m, unsigned d) {
+// Howard Hinnant's days_from_civil, in 64 bits so no caller can overflow it
+int64_t DaysFromCivil(int64_t y, unsigned m, unsigned d) {
     y -= m <= 2;
     const int64_t era = (y >= 0 ? y : y - 399) / 400;
     const unsigned yoe = static_cast<unsigned>(y - era * 400);
     const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+int DaysInMonth(int y, int m) {
+    static constexpr int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (m == 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0)) {
+        return 29;  // leap year
+    }
+    return kDays[m - 1];
 }
 
 // Round to a fixed number of decimals so records stay small and diffable
@@ -48,10 +61,40 @@ json SummaryToJson(const RunSummary& s) {
     return j;
 }
 
+// One JSON value as T. Numbers are checked while they are still wide: get<T>()
+// narrows with no range test, which is UB out of range and truncates a fractional
+// int. History is a plain file the player may hand-edit, so both happen in practice.
+template <typename T>
+T Read(const json& v, const char* what, T fallback) {
+    if (v.is_null()) {
+        return fallback;
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        const double d = v.get<double>();
+        if (!std::isfinite(d)) {
+            throw std::runtime_error(std::string(what) + " is out of range");
+        }
+        const double hi = static_cast<double>(std::numeric_limits<T>::max());
+        return static_cast<T>(std::clamp(d, -hi, hi));
+    } else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
+        if (!v.is_number_integer()) {
+            throw std::runtime_error(std::string(what) + " must be a whole number");
+        }
+        const int64_t n = v.get<int64_t>();
+        if (n < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
+            n > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+            throw std::runtime_error(std::string(what) + " is out of range");
+        }
+        return static_cast<T>(n);
+    } else {
+        return v.get<T>();
+    }
+}
+
 template <typename T>
 T Get(const json& j, const char* key, T fallback) {
     auto it = j.find(key);
-    return it != j.end() && !it->is_null() ? it->get<T>() : fallback;
+    return it == j.end() ? fallback : Read<T>(*it, key, fallback);
 }
 
 bool SummaryFromJsonValue(const json& j, RunSummary& s) {
@@ -65,7 +108,8 @@ bool SummaryFromJsonValue(const json& j, RunSummary& s) {
     s.name = Get<std::string>(j, "name", s.scenario);
     s.category = Get<std::string>(j, "category", "");
     s.file = Get<std::string>(j, "file", "");
-    s.duration = Get<float>(j, "duration", 0);
+    // the screens format this as seconds and cast it to int: keep it to one day
+    s.duration = std::clamp(Get<float>(j, "duration", 0), 0.0f, 86400.0f);
     s.score = Get<float>(j, "score", 0);
     s.shots = Get<int>(j, "shots", 0);
     s.hits = Get<int>(j, "hits", 0);
@@ -82,7 +126,10 @@ bool SummaryFromJsonValue(const json& j, RunSummary& s) {
 
 int64_t RunTime::DayNumber() const { return DaysFromCivil(year, month, day); }
 
-int64_t RunTime::Seconds() const { return DayNumber() * 86400 + hour * 3600 + minute * 60 + second; }
+int64_t RunTime::Seconds() const {
+    // in 64 bits: hour * 3600 in int overflows for a timestamp built by any caller
+    return DayNumber() * 86400 + hour * int64_t{3600} + minute * int64_t{60} + second;
+}
 
 std::string RunTime::Stamp() const {
     char buf[32];
@@ -99,13 +146,26 @@ std::string RunTime::Iso() const {
 bool RunTime::FromIso(std::string_view s, RunTime& out) {
     const std::string str(s);
     RunTime t;
-    if (std::sscanf(str.c_str(), "%d-%d-%dT%d:%d:%d", &t.year, &t.month, &t.day, &t.hour, &t.minute, &t.second) !=
-        6) {
+    long long year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    int used = 0;
+    // scanned as long long: %d on a wider number is UB, and trailing junk is noise
+    if (std::sscanf(str.c_str(), "%lld-%lld-%lldT%lld:%lld:%lld%n", &year, &month, &day, &hour, &minute, &second,
+                    &used) != 6 ||
+        static_cast<size_t>(used) != str.size()) {
         return false;
     }
-    if (t.month < 1 || t.month > 12 || t.day < 1 || t.day > 31) {
+    // every component, not just month/day: DayNumber() and Seconds() assume a real date
+    if (year < 1970 || year > 9999 || month < 1 || month > 12 || day < 1 ||
+        day > DaysInMonth(static_cast<int>(year), static_cast<int>(month)) || hour < 0 || hour > 23 || minute < 0 ||
+        minute > 59 || second < 0 || second > 60) {
         return false;
     }
+    t.year = static_cast<int>(year);
+    t.month = static_cast<int>(month);
+    t.day = static_cast<int>(day);
+    t.hour = static_cast<int>(hour);
+    t.minute = static_cast<int>(minute);
+    t.second = static_cast<int>(second);
     out = t;
     return true;
 }
@@ -194,25 +254,26 @@ bool RecordFromJson(std::string_view text, RunRecord& out, std::string& error) {
         r.seed = Get<uint32_t>(j, "seed", 0);
         for (const json& a : j.at("shots")) {
             ShotEvent s;
-            s.t = a.at(0).get<float>();
-            s.hit = a.at(1).get<int>() != 0;
-            s.target = a.at(2).get<int>();
-            s.dx = a.at(3).get<float>();
-            s.dy = a.at(4).get<float>();
-            s.radius = a.at(5).get<float>();
+            s.t = Read<float>(a.at(0), "shots[0]", 0);
+            s.hit = Read<int>(a.at(1), "shots[1]", 0) != 0;
+            s.target = Read<int>(a.at(2), "shots[2]", -1);
+            s.dx = Read<float>(a.at(3), "shots[3]", 0);
+            s.dy = Read<float>(a.at(4), "shots[4]", 0);
+            s.radius = Read<float>(a.at(5), "shots[5]", 0);
             r.shots.push_back(s);
         }
         for (const json& a : j.at("kills")) {
-            r.kills.push_back({a.at(0).get<float>(), a.at(1).get<int>(), a.at(2).get<float>()});
+            r.kills.push_back({Read<float>(a.at(0), "kills[0]", 0), Read<int>(a.at(1), "kills[1]", 0),
+                               Read<float>(a.at(2), "kills[2]", 0)});
         }
         for (const json& a : j.at("samples")) {
             ViewSample v;
-            v.t = a.at(0).get<float>();
-            v.yaw = a.at(1).get<float>();
-            v.pitch = a.at(2).get<float>();
-            v.x = a.at(3).get<float>();
-            v.y = a.at(4).get<float>();
-            v.z = a.at(5).get<float>();
+            v.t = Read<float>(a.at(0), "samples[0]", 0);
+            v.yaw = Read<float>(a.at(1), "samples[1]", 0);
+            v.pitch = Read<float>(a.at(2), "samples[2]", 0);
+            v.x = Read<float>(a.at(3), "samples[3]", 0);
+            v.y = Read<float>(a.at(4), "samples[4]", 0);
+            v.z = Read<float>(a.at(5), "samples[5]", 0);
             r.samples.push_back(v);
         }
         out = std::move(r);

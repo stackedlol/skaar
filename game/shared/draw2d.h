@@ -41,8 +41,10 @@ public:
 
 private:
     struct Glyph {
-        float x, y, w, h;         // atlas rect, pixels
-        float xoff, yoff, advance; // relative to pen on the baseline, pixels
+        // zero-initialised: a truncated .fontinfo record must not leave these to
+        // whatever was on the stack, since they become glyph metrics and draw coords
+        float x = 0, y = 0, w = 0, h = 0;            // atlas rect, pixels
+        float xoff = 0, yoff = 0, advance = 0;       // relative to pen on the baseline, pixels
     };
 
     const Glyph* Find(uint32_t codepoint) const;

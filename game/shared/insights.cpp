@@ -2,6 +2,7 @@
 #include "insights.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 
 namespace skaar::insights {
@@ -17,6 +18,10 @@ float Mean(const std::vector<float>& v) {
     }
     return sum / static_cast<float>(v.size());
 }
+
+// History is a plain JSON file the player may hand-edit, so a duration is bounded
+// before it reaches a cast or a total the screens format.
+float SafeSeconds(float v) { return std::isfinite(v) ? std::clamp(v, 0.0f, 86400.0f) : 0; }
 
 }  // namespace
 
@@ -83,11 +88,11 @@ Overview Summarize(const std::vector<RunSummary>& history, const RunTime& now) {
     int64_t newest = -1;
     for (int i = 0; i < o.totalRuns; i++) {
         const RunSummary& r = history[i];
-        o.totalSeconds += r.duration;
+        o.totalSeconds += SafeSeconds(r.duration);
         days.insert(r.when.DayNumber());
         if (r.when.DayNumber() == today) {
             o.todayRuns++;
-            o.todaySeconds += r.duration;
+            o.todaySeconds += SafeSeconds(r.duration);
         }
         // history is append-ordered, but don't trust it for "latest"
         if (r.when.Seconds() >= newest) {
@@ -124,8 +129,8 @@ Overview Summarize(const std::vector<RunSummary>& history, const RunTime& now) {
             break;
         }
         o.sessionRuns++;
-        o.sessionSeconds += history[i].duration;
-        prev = ends[i] - static_cast<int64_t>(history[i].duration);
+        o.sessionSeconds += SafeSeconds(history[i].duration);
+        prev = ends[i] - static_cast<int64_t>(SafeSeconds(history[i].duration));
     }
     return o;
 }
@@ -189,6 +194,9 @@ BenchmarkProgress Progress(const Benchmark& benchmark, const std::map<std::strin
             weakest = m;
             p.weakestCategory = category;
         }
+    }
+    if (benchmark.entries.empty()) {
+        p.overallTier = -1;  // nothing to stand on: "unranked", per insights.h
     }
     return p;
 }

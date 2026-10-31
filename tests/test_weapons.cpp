@@ -55,6 +55,55 @@ TEST("weapon files only need what they change") {
     CHECK(!ParseWeapon("bad", R"({"slot": 9, "type": "laser"})", w, error));
 }
 
+TEST("weapon numbers out of range are rejected, not narrowed") {
+    WeaponDef w;
+    std::string error;
+    // a JSON float int range-checks nothing: 1e300 used to reach static_cast<int>
+    CHECK(!ParseWeapon("rail", R"({"refireMs": 1e300})", w, error));
+    CHECK(!ParseWeapon("rail", R"({"slot": 1e300})", w, error));
+    CHECK(!ParseWeapon("rail", R"({"pellets": 1e30})", w, error));
+    CHECK(!ParseWeapon("rail", R"({"magazine": -1e30})", w, error));
+    // and a fractional value used to truncate silently
+    CHECK(!ParseWeapon("rail", R"({"refireMs": 12.5})", w, error));
+    CHECK(!ParseWeapon("rail", R"({"slot": 3.5})", w, error));
+    CHECK(!ParseWeapon("rail", R"({"magazine": 9.5})", w, error));
+
+    // damage and the cone: both feed a float->int cast and the view angles
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "damage": 1e30})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "damage": 1e300})", w, error));
+    CHECK(!ParseWeapon("rocket", R"({"splashDamage": 1e30})", w, error));
+    CHECK(!ParseWeapon("rocket", R"({"splashRadius": 1e30})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "headMultiplier": 1e6})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "crouchScale": 1e300})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "crouchScale": -4})", w, error));
+    CHECK(!ParseWeapon("shotgun", R"({"spread": 1e300})", w, error));
+    // shipped-scale values are still accepted
+    CHECK(ParseWeapon("rifle", R"({"slot": 2, "damage": 36, "headMultiplier": 4, "crouchScale": 0.6})", w, error));
+    CHECK(ParseWeapon("rocket", R"({"splashDamage": 100, "splashRadius": 120})", w, error));
+}
+
+TEST("recoil.recoverMs is bounded to what the game modules can carry") {
+    WeaponDef w;
+    std::string error;
+    // the pause is kept in 15 bits: 32768+ can never reset the spray, <0 never leaves it
+    CHECK(ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1, 0]], "recoverMs": 0}})", w, error));
+    CHECK(ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1, 0]], "recoverMs": 32767}})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1, 0]], "recoverMs": 32768}})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1, 0]], "recoverMs": -5}})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1, 0]], "recoverMs": 1e300}})", w, error));
+    CHECK(!ParseWeapon("rifle", R"({"slot": 2, "recoil": {"pattern": [[1e300, 0]]}})", w, error));
+}
+
+TEST("a weapon file must be a JSON object") {
+    WeaponDef w;
+    std::string error;
+    // these used to "parse" as the built-in weapon, untouched, with no error
+    CHECK(!ParseWeapon("rail", "null", w, error) && !error.empty());
+    CHECK(!ParseWeapon("rail", "42", w, error) && !error.empty());
+    CHECK(!ParseWeapon("rail", R"("hi")", w, error) && !error.empty());
+    CHECK(!ParseWeapon("rail", "[1, 2, 3]", w, error) && !error.empty());
+}
+
 TEST("weapon registry by slot and id") {
     ResetWeapons();
     CHECK(WeaponBySlot(7) && WeaponBySlot(7)->id == "rail");

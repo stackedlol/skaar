@@ -14,6 +14,18 @@ TEST("calendar day numbers") {
     CHECK(RunTime::FromIso("2026-10-22T18:30:05", t) && t.hour == 18 && t.second == 5);
     CHECK(!RunTime::FromIso("2026-13-01T00:00:00", t));
     CHECK(!RunTime::FromIso("yesterday", t));
+    // every component, not just month/day: the accessors assume a real date
+    CHECK(!RunTime::FromIso("2026-02-31T00:00:00", t));
+    CHECK(!RunTime::FromIso("2026-10-22T700000:00:00", t));
+    CHECK(!RunTime::FromIso("2026-10-22T-600000:00:00", t));
+    CHECK(!RunTime::FromIso("-2147483648-01-01T00:00:00", t));
+    CHECK(!RunTime::FromIso("2026-10-22T24:00:00", t));
+    CHECK(!RunTime::FromIso("2026-10-22T00:60:00", t));
+    CHECK(!RunTime::FromIso("2026-10-22T18:30:05junk", t));
+    CHECK(RunTime::FromIso("2024-02-29T23:59:60", t));  // leap day and a leap second
+    CHECK(t.DayNumber() == 19782);
+    CHECK(RunTime{1970, 1, 1, 0, 0, 0}.Seconds() == 0);
+    CHECK(RunTime{2026, 10, 22, 18, 30, 5}.Seconds() == 1792693805);
 }
 
 TEST("summary round trip") {
@@ -42,6 +54,40 @@ TEST("summary round trip") {
     CHECK_NEAR(back.accuracy, s.accuracy, 1e-4);
     CHECK(back.kills == 130 && back.shots == 140);
     CHECK_NEAR(back.sensCm360, 34.6, 0.01);
+}
+
+TEST("history numbers outside their type are skipped, not cast") {
+    // 3e9 does not fit an int: the conversion used to be UB, then saturated
+    int skipped = -1;
+    auto runs = ParseHistory(
+        R"({"scenario":"a","when":"2026-10-22T00:00:00","shots":3e9})" "\n"
+        R"({"scenario":"b","when":"2026-10-22T00:00:00","hits":-1e10})" "\n"
+        R"({"scenario":"c","when":"2026-10-22T00:00:00","kills":1e300})" "\n"
+        R"({"scenario":"d","when":"2026-10-22T00:00:00","shots":2.5})" "\n"
+        R"({"scenario":"e","when":"2026-10-22T00:00:00","shots":7})" "\n",
+        &skipped);
+    CHECK(runs.size() == 1 && runs[0].scenario == "e" && runs[0].shots == 7);
+    CHECK(skipped == 4);
+    // a record's seed and shot target get the same treatment
+    RunRecord r;
+    std::string error;
+    CHECK(!RecordFromJson(R"({"summary": {"scenario": "a", "when": "2026-10-22T00:00:00"}, "seed": 1e300,
+        "shots": [], "kills": [], "samples": []})", r, error));
+    CHECK(!RecordFromJson(R"({"summary": {"scenario": "a", "when": "2026-10-22T00:00:00"}, "shots":
+        [[1, 1, 1e300, 0, 0, 0]], "kills": [], "samples": []})", r, error));
+}
+
+TEST("a huge duration cannot reach the duration formatting") {
+    // 1e30 used to reach ui::FormatDuration's static_cast<int> (UB, and 68 years in the tile)
+    int skipped = -1;
+    const auto runs = ParseHistory(
+        R"({"scenario":"a","when":"2026-10-22T00:00:00","duration":1e30})" "\n"
+        R"({"scenario":"b","when":"2026-10-22T00:00:00","duration":-5})" "\n",
+        &skipped);
+    CHECK(runs.size() == 2 && skipped == 0);
+    for (const auto& r : runs) {
+        CHECK(r.duration >= 0 && r.duration <= 86400 && static_cast<int>(r.duration) >= 0);
+    }
 }
 
 TEST("history skips bad lines") {
@@ -79,6 +125,29 @@ TEST("record round trip") {
 }
 
 #include "shared/arenalog.h"
+
+TEST("arena lines: no throw on bad bytes, no cast on bad numbers") {
+    ArenaSession s;
+    s.when = {2026, 10, 22, 20, 0, 0};
+    s.map = "duel";
+    s.ruleset = "cpm\xff";  // a config file is bytes, not UTF-8
+    s.weapons["rail\xfe"] = {1, 2};
+    const std::string line = ArenaSessionToJsonLine(s);  // used to throw type_error.316
+    CHECK(!line.empty() && line.back() == '}');
+    CHECK(ParseArenaHistory(line + "\n").size() == 1);  // and it is still readable JSON
+
+    ArenaSession back;
+    CHECK(!ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","kills":1e300})", back));
+    CHECK(!ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","weapons":{"x":[1e300,2]}})", back));
+    CHECK(!ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","kills":1.5})", back));
+    CHECK(ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","kills":12,"weapons":{"x":[3,2]}})", back));
+    CHECK(back.kills == 12 && back.weapons.at("x").shots == 3);
+    // seconds is summed and formatted as a duration: 1e30 was UB in that int cast
+    CHECK(ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","seconds":1e30})", back));
+    CHECK(back.seconds >= 0 && back.seconds <= 86400);
+    CHECK(ArenaSessionFromJson(R"({"when":"2026-10-22T00:00:00","seconds":-30})", back));
+    CHECK(back.seconds == 0);
+}
 
 TEST("arena session round trip") {
     ArenaSession s;

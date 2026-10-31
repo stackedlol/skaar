@@ -50,6 +50,16 @@ TEST("session ends at a 30 minute gap") {
     CHECK(o.latest == 3);
 }
 
+TEST("a hostile duration does not poison the session totals") {
+    // 1e30 does not fit int64: the cast was UB and the gap arithmetic overflowed
+    std::vector<RunSummary> h = {Run("a", {2026, 10, 22, 10, 0, 0}, 1, 1e30f),
+                                Run("b", {2026, 10, 22, 10, 1, 0}, 1, 60)};
+    const ins::Overview o = ins::Summarize(h, {2026, 10, 22, 20, 0, 0});
+    CHECK(std::isfinite(o.sessionSeconds) && o.sessionSeconds <= 2 * 86400);
+    CHECK(std::isfinite(o.totalSeconds) && o.totalSeconds <= 2 * 86400);
+    CHECK(o.sessionRuns == 2);
+}
+
 TEST("personal bests and trend") {
     std::vector<RunSummary> h;
     for (int i = 0; i < 20; i++) {
@@ -87,6 +97,12 @@ TEST("benchmark standing and focus pick") {
     CHECK(p.overallTier == -1);    // c is unplayed
     CHECK(p.recommended == 2);     // so it's the focus
     CHECK(p.weakestCategory == "track");
+
+    // a benchmark that lists no scenarios has nothing to stand on: -1, not the top tier
+    Benchmark empty;
+    CHECK(ParseBenchmark("e", R"({"tiers": ["t1", "t2", "t3"], "scenarios": []})", empty, error));
+    const ins::BenchmarkProgress pe = ins::Progress(empty, ins::PerScenario(h), h, scenarios);
+    CHECK(pe.entries.empty() && pe.overallTier == -1 && pe.overallScore == 0);
 
     h.push_back(Run("c", {2026, 10, 22, 12, 0, 0}, 31));
     p = ins::Progress(b, ins::PerScenario(h), h, scenarios);

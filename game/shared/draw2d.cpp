@@ -1,6 +1,7 @@
 // This file is part of Skaar. GPLv2 or later.
 #include "draw2d.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <sstream>
@@ -15,6 +16,7 @@ float g_scale = 1.0f;
 float g_width = 1920.0f;
 
 constexpr float kHeight = 1080.0f;
+constexpr int kMaxGridLines = 512;  // a grid never needs more, whatever the aspect
 
 float Snap(float v) { return std::round(v * g_scale); }
 
@@ -60,9 +62,16 @@ bool Font::Load(const Backend& backend, const char* name) {
             float descent, line;
             in >> ascent_ >> descent >> line;
         } else if (key == "glyph") {
-            uint32_t cp;
+            uint32_t cp = 0;
             Glyph g;
-            in >> cp >> g.x >> g.y >> g.w >> g.h >> g.xoff >> g.yoff >> g.advance;
+            if (!(in >> cp >> g.x >> g.y >> g.w >> g.h >> g.xoff >> g.yoff >> g.advance)) {
+                // a short record (an interrupted write) leaves the remaining fields at
+                // their defaults; keep them out of the atlas rather than use half a glyph
+                Com_Printf(S_COLOR_YELLOW "WARNING: font %s: truncated glyph record\n", infoPath.c_str());
+                in.clear();
+                std::getline(in, key);  // drop the rest of the line
+                continue;
+            }
             glyphs_[cp] = g;
         } else {
             std::string rest;
@@ -135,9 +144,15 @@ float Font::Draw(float x, float y, float size, std::string_view text, Color colo
 }
 
 bool Init(const Backend& backend, int vidWidth, int vidHeight) {
+    // a zero viewport would make Scale() 0 and Width() infinite, which Background()'s
+    // grid loop cannot survive. Both callers only warn on a false return, so clamp the
+    // canvas rather than leave the backend uninitialised for everything that draws.
+    if (vidWidth <= 0 || vidHeight <= 0) {
+        Com_Printf(S_COLOR_YELLOW "WARNING: draw2d: bad viewport %dx%d, using 1x1\n", vidWidth, vidHeight);
+    }
     g_backend = backend;
-    g_scale = vidHeight / kHeight;
-    g_width = vidWidth / g_scale;
+    g_scale = std::max(vidHeight, 1) / kHeight;
+    g_width = std::max(vidWidth, 1) / g_scale;
     g_white = backend.registerShader("white");
 
     bool ok = g_fonts.display.Load(backend, "manrope-200");
@@ -181,13 +196,14 @@ void Background(bool grid) {
     if (!grid) {
         return;
     }
-    // Faint arena grid, every 4th line a touch stronger
+    // Faint arena grid, every 4th line a touch stronger. Both loops are bounded: a
+    // very short viewport makes Width() huge and would queue a line per pixel.
     int i = 0;
-    for (float x = 0; x < g_width; x += theme::kGridStep, i++) {
+    for (float x = 0; x < g_width && i < kMaxGridLines; x += theme::kGridStep, i++) {
         VLine(x, 0, kHeight, i % 4 ? theme::kGrid : theme::kGrid.Alpha(2.0f));
     }
     i = 0;
-    for (float y = 0; y < kHeight; y += theme::kGridStep, i++) {
+    for (float y = 0; y < kHeight && i < kMaxGridLines; y += theme::kGridStep, i++) {
         HLine(0, y, g_width, i % 4 ? theme::kGrid : theme::kGrid.Alpha(2.0f));
     }
 }

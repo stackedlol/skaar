@@ -3,6 +3,10 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <stdexcept>
 
 #include "json.hpp"
@@ -45,10 +49,18 @@ void Read(const json& j, const char* key, float& value, float min, float max) {
     if (!j.contains(key)) {
         return;
     }
-    const float v = j.at(key).get<float>();
-    if (!(v >= min && v <= max)) {  // also rejects NaN
+    // the JSON number is checked as a double: narrowing an out-of-float-range
+    // value first is UB, and the range test would then only see the narrowing
+    const double d = j.at(key).get<double>();
+    if (!(d >= min && d <= max)) {  // also rejects NaN
         throw std::runtime_error(std::string(key) + " must be between " + std::to_string(min) + " and " +
                                  std::to_string(max));
+    }
+    const float v = static_cast<float>(d);
+    // %.9g only round-trips normal floats: a subnormal encodes to a decimal that the
+    // client cannot decode, and it used to lose the whole ruleset
+    if (v != 0 && std::fpclassify(v) == FP_SUBNORMAL) {
+        throw std::runtime_error(std::string(key) + " is too small to send to clients");
     }
     value = v;
 }
@@ -57,12 +69,17 @@ void Read(const json& j, const char* key, int& value, int min, int max) {
     if (!j.contains(key)) {
         return;
     }
-    const int v = j.at(key).get<int>();
+    // widen first: get<int>() narrows before any range test, which is UB for an
+    // out-of-range number and truncates 12.7 to 12 behind the user's back
+    if (!j.at(key).is_number_integer()) {
+        throw std::runtime_error(std::string(key) + " must be a whole number");
+    }
+    const int64_t v = j.at(key).get<int64_t>();
     if (v < min || v > max) {
         throw std::runtime_error(std::string(key) + " must be between " + std::to_string(min) + " and " +
                                  std::to_string(max));
     }
-    value = v;
+    value = static_cast<int>(v);
 }
 
 void Read(const json& j, const char* key, bool& value) {
@@ -300,7 +317,16 @@ bool DecodeRuleset(std::string_view cs, std::string& error) {
             } else if (like.is_number_integer()) {
                 j[key] = std::stoi(v);
             } else {
-                j[key] = std::stof(v);
+                // std::stof throws out_of_range on a subnormal, which used to drop the
+                // whole configstring: read the value as a double and let Read() judge it,
+                // snapping anything below the smallest normal to 0 (what it means in the
+                // physics) so a tiny value can never cost the client the whole ruleset
+                char* end = nullptr;
+                const double d = std::strtod(v.c_str(), &end);
+                if (end == v.c_str() || *end != '\0') {
+                    throw std::runtime_error("bad number: " + v);
+                }
+                j[key] = std::fabs(d) < static_cast<double>(std::numeric_limits<float>::min()) ? 0.0 : d;
             }
         }
         SetRulesetAt(index, FromObject(id, j));

@@ -1,7 +1,12 @@
 // This file is part of Skaar. GPLv2 or later.
 #include "arenalog.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <type_traits>
 
 #include "json.hpp"
 
@@ -10,10 +15,40 @@ namespace {
 
 using json = nlohmann::json;
 
+// One JSON value as T. Numbers are checked while they are still wide: get<T>()
+// narrows with no range test, which is UB out of range and truncates a fractional
+// int. The history file is a plain file the player may hand-edit.
+template <typename T>
+T Read(const json& v, const char* what, T fallback) {
+    if (v.is_null()) {
+        return fallback;
+    }
+    if constexpr (std::is_floating_point_v<T>) {
+        const double d = v.get<double>();
+        if (!std::isfinite(d)) {
+            throw std::runtime_error(std::string(what) + " is out of range");
+        }
+        const double hi = static_cast<double>(std::numeric_limits<T>::max());
+        return static_cast<T>(std::clamp(d, -hi, hi));
+    } else if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
+        if (!v.is_number_integer()) {
+            throw std::runtime_error(std::string(what) + " must be a whole number");
+        }
+        const int64_t n = v.get<int64_t>();
+        if (n < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
+            n > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+            throw std::runtime_error(std::string(what) + " is out of range");
+        }
+        return static_cast<T>(n);
+    } else {
+        return v.get<T>();
+    }
+}
+
 template <typename T>
 T Get(const json& j, const char* key, T fallback) {
     auto it = j.find(key);
-    return it != j.end() && !it->is_null() ? it->get<T>() : fallback;
+    return it == j.end() ? fallback : Read<T>(*it, key, fallback);
 }
 
 }  // namespace
@@ -32,7 +67,9 @@ std::string ArenaSessionToJsonLine(const ArenaSession& s) {
               {"kills", s.kills},
               {"deaths", s.deaths},
               {"weapons", weapons}};
-    return j.dump();
+    // a map name or g_movement value is bytes from a config file or a map list, so
+    // they need not be UTF-8: replace them rather than throw into the server's path
+    return j.dump(-1, ' ', false, json::error_handler_t::replace);
 }
 
 bool ArenaSessionFromJson(std::string_view line, ArenaSession& out) {
@@ -47,14 +84,15 @@ bool ArenaSessionFromJson(std::string_view line, ArenaSession& out) {
         }
         s.map = Get<std::string>(j, "map", "");
         s.ruleset = Get<std::string>(j, "ruleset", "vq3");
-        s.seconds = Get<float>(j, "seconds", 0);
+        // the same cast-and-format path as RunSummary::duration: keep it to one day
+        s.seconds = std::clamp(Get<float>(j, "seconds", 0), 0.0f, 86400.0f);
         s.damageDealt = Get<int>(j, "damageDealt", 0);
         s.damageTaken = Get<int>(j, "damageTaken", 0);
         s.kills = Get<int>(j, "kills", 0);
         s.deaths = Get<int>(j, "deaths", 0);
         if (j.contains("weapons")) {
             for (const auto& [id, v] : j.at("weapons").items()) {
-                s.weapons[id] = {v.at(0).get<int>(), v.at(1).get<int>()};
+                s.weapons[id] = {Read<int>(v.at(0), "weapons", 0), Read<int>(v.at(1), "weapons", 0)};
             }
         }
         out = std::move(s);

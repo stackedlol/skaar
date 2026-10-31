@@ -10,6 +10,7 @@ namespace {
 
 Backend g_backend{};
 qhandle_t g_white = 0;
+constexpr int kMaxTicks = 256;  // an axis never needs more gridlines than this
 
 void SetColor(Color c) {
     const float rgba[4] = {c.r, c.g, c.b, c.a};
@@ -199,7 +200,10 @@ void Progress(const Rect& r, float fraction, Color track, Color fill) {
 
 void NiceRange(float lo, float hi, int ticks, float& outLo, float& outHi, float& outStep) {
     if (hi <= lo) {
-        hi = lo + 1;
+        // pad relative to the magnitude: a flat series at a big value (a 9,000,000 ms
+        // TTK) would otherwise get a step below the float ULP of lo
+        const float pad = std::max(1.0f, std::fabs(lo) * 0.01f);
+        hi = lo + pad;
     }
     const float raw = (hi - lo) / std::max(1, ticks);
     const float mag = std::pow(10.0f, std::floor(std::log10(raw)));
@@ -215,10 +219,15 @@ void NiceRange(float lo, float hi, int ticks, float& outLo, float& outHi, float&
 
 void YAxis(const Rect& r, float lo, float hi, float step, const char* format) {
     const Font& mono = GetFonts().mono;
-    if (step <= 0 || hi <= lo) {
+    if (!(step > 0) || !(hi > lo) || !std::isfinite(lo) || !std::isfinite(hi) || !std::isfinite(step)) {
         return;
     }
-    for (float v = lo; v <= hi + step * 0.01f; v += step) {
+    // count the ticks instead of stepping the float: where the step is below the ULP
+    // of lo, v += step never changes v and the loop never ended (it flooded the queue)
+    const float span = std::min((hi - lo) / step, static_cast<float>(kMaxTicks - 1));
+    const int ticks = static_cast<int>(span + 0.5f) + 1;
+    for (int i = 0; i < ticks; i++) {
+        const float v = lo + static_cast<float>(i) * step;
         const float y = r.Bottom() - (v - lo) / (hi - lo) * r.h;
         HLine(r.x, y, r.w, theme::kHairline);
         char label[32];

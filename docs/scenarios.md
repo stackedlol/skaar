@@ -34,7 +34,7 @@ copy as `scenarios/<id>-mine.json` in your home dir. For anything it doesn't cov
     "alive": 3,                         // on screen at once, 1..16
     "radius": 22,                       // world units (the player is 30 wide)
     "health": 1,                        // click: hits to kill | hold: seconds on target to kill
-    "lifetime": 0,                      // seconds before a target vanishes unhit (0 = never)
+    "lifetime": 0,                      // seconds before a target vanishes unhit (0 = never, else >= 0.05)
     "spawn": {
       "shape": "grid",                  // cone: random in the window | grid: cols × rows cells over the window
       "cols": 5, "rows": 5,
@@ -44,13 +44,13 @@ copy as `scenarios/<id>-mine.json` in your home dir. For anything it doesn't cov
     },
     "motion": {
       "type": "strafe",                 // static | strafe (left/right) | float (any direction)
-      "speed": [260, 420],              // world units per second, re-rolled at each change
+      "speed": [260, 420],              // world units per second, re-rolled at each change (|speed| <= 5000)
       "changeEvery": [0.3, 1.1]         // seconds between direction changes
     }
   },
   "score": {
     "kill": 100,                        // points per kill
-    "accuracyWeight": 0.5,              // click: score = kills × kill × ((1 − w) + w × accuracy)
+    "accuracyWeight": 0.5,              // click: score = kills × kill × ((1 − w) + w × accuracy), w 0..1
     "perSecondOnTarget": 100            // hold: score = seconds on target × this + kills × kill
   }
 }

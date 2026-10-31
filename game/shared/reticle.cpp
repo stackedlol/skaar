@@ -38,11 +38,14 @@ void FillPx(float x, float y, float w, float h, Color c) {
 
 Reticle ReticleFromCvars(std::string (*cvarString)(const char* name)) {
     Reticle r;
-    const int style = static_cast<int>(Number(cvarString, "cg_crosshairStyle", 0));
+    // a typed or archived cvar can hold anything: clamp before the cast (UB out of
+    // range) and bound the sizes, which are handed to the renderer as rectangles
+    const float styleValue = Number(cvarString, "cg_crosshairStyle", 0);
+    const int style = std::isfinite(styleValue) ? static_cast<int>(std::clamp(styleValue, 0.0f, 2.0f)) : 0;
     r.style = style == 1 ? ReticleStyle::kDot : style == 2 ? ReticleStyle::kCrossDot : ReticleStyle::kCross;
-    r.length = std::max(0.0f, Number(cvarString, "cg_crosshairSize", r.length));
-    r.gap = std::max(0.0f, Number(cvarString, "cg_crosshairGap", r.gap));
-    r.thickness = std::max(0.5f, Number(cvarString, "cg_crosshairThickness", r.thickness));
+    r.length = std::clamp(Number(cvarString, "cg_crosshairSize", r.length), 0.0f, 64.0f);
+    r.gap = std::clamp(Number(cvarString, "cg_crosshairGap", r.gap), 0.0f, 64.0f);
+    r.thickness = std::clamp(Number(cvarString, "cg_crosshairThickness", r.thickness), 0.5f, 32.0f);
     r.color = ParseHex(cvarString("cg_crosshairColor"), r.color);
     r.outline = Number(cvarString, "cg_crosshairOutline", 1) != 0;
     return r;
