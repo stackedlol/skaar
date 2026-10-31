@@ -3225,11 +3225,12 @@ void Com_Frame( void ) {
 	else
 		minMsec = 1;
 
+	// skaar: this loop is the only place a frame reads the network socket
+	// (NET_Sleep -> NET_Event -> NET_GetPacket). Com_PaceFrame already did the
+	// waiting, so minMsec is 0 on that path - but 0 is also what Com_TimeVal(0)
+	// returns here anyway, i.e. "poll without blocking". Never skip the body.
 	do
 	{
-		if(!minMsec)
-			break;	// already paced by Com_PaceFrame
-
 		if(com_sv_running->integer)
 		{
 			timeValSV = SV_SendQueuedPackets();
