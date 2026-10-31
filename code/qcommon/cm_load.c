@@ -70,6 +70,7 @@ cbrush_t	*box_brush;
 
 
 
+void	CM_InitBoxSides (void);
 void	CM_InitBoxHull (void);
 void	CM_FloodAreaConnections (void);
 
@@ -121,7 +122,7 @@ CMod_LoadSubmodels
 void CMod_LoadSubmodels( lump_t *l ) {
 	dmodel_t	*in;
 	cmodel_t	*out;
-	int			i, j, count;
+	int			i, j, count, first, num;
 	int			*indexes;
 
 	in = (void *)(cmod_base + l->fileofs);
@@ -153,18 +154,32 @@ void CMod_LoadSubmodels( lump_t *l ) {
 		}
 
 		// make a "leaf" just to hold the model's brushes and surfaces
-		out->leaf.numLeafBrushes = LittleLong( in->numBrushes );
+		first = LittleLong( in->firstBrush );
+		num = LittleLong( in->numBrushes );
+		if ( first < 0 || num < 0 || num > cm.numBrushes || first > cm.numBrushes - num ) {
+			Com_Error( ERR_DROP, "bad BSP: model %i takes %i brushes from %i, the map has %i",
+				i, num, first, cm.numBrushes );
+		}
+		out->leaf.numLeafBrushes = num;
 		indexes = Hunk_Alloc( out->leaf.numLeafBrushes * 4, h_high );
 		out->leaf.firstLeafBrush = indexes - cm.leafbrushes;
 		for ( j = 0 ; j < out->leaf.numLeafBrushes ; j++ ) {
-			indexes[j] = LittleLong( in->firstBrush ) + j;
+			indexes[j] = first + j;
 		}
 
-		out->leaf.numLeafSurfaces = LittleLong( in->numSurfaces );
+		// the surface count is only known once CMod_LoadPatches has run, so the
+		// upper bound of this range is checked in CMod_ValidateIndexes
+		first = LittleLong( in->firstSurface );
+		num = LittleLong( in->numSurfaces );
+		if ( first < 0 || num < 0 ) {
+			Com_Error( ERR_DROP, "bad BSP: model %i takes %i surfaces from %i",
+				i, num, first );
+		}
+		out->leaf.numLeafSurfaces = num;
 		indexes = Hunk_Alloc( out->leaf.numLeafSurfaces * 4, h_high );
 		out->leaf.firstLeafSurface = indexes - cm.leafsurfaces;
 		for ( j = 0 ; j < out->leaf.numLeafSurfaces ; j++ ) {
-			indexes[j] = LittleLong( in->firstSurface ) + j;
+			indexes[j] = first + j;
 		}
 	}
 }
@@ -180,7 +195,7 @@ void CMod_LoadNodes( lump_t *l ) {
 	dnode_t		*in;
 	int			child;
 	cNode_t		*out;
-	int			i, j, count;
+	int			i, j, count, planeNum;
 	
 	in = (void *)(cmod_base + l->fileofs);
 	if (l->filelen % sizeof(*in))
@@ -196,10 +211,27 @@ void CMod_LoadNodes( lump_t *l ) {
 
 	for (i=0 ; i<count ; i++, out++, in++)
 	{
-		out->plane = cm.planes + LittleLong( in->planeNum );
+		planeNum = LittleLong( in->planeNum );
+		if ( planeNum < 0 || planeNum >= cm.numPlanes ) {
+			Com_Error( ERR_DROP, "bad BSP: node %i uses plane %i, the map has %i",
+				i, planeNum, cm.numPlanes );
+		}
+		out->plane = cm.planes + planeNum;
 		for (j=0 ; j<2 ; j++)
 		{
 			child = LittleLong (in->children[j]);
+			// negative numbers are -(leaf+1). Requiring a child node to be
+			// numbered above its parent also rules out cycles, which would send
+			// CM_TraceThroughTree into unbounded recursion
+			if ( child >= 0 ) {
+				if ( child <= i || child >= count ) {
+					Com_Error( ERR_DROP, "bad BSP: node %i has child node %i of %i, children must follow their parent",
+						i, child, count );
+				}
+			} else if ( child <= -1 - cm.numLeafs ) {
+				Com_Error( ERR_DROP, "bad BSP: node %i has child leaf %i of %i",
+					i, -1 - child, cm.numLeafs );
+			}
 			out->children[j] = child;
 		}
 	}
@@ -233,7 +265,7 @@ CMod_LoadBrushes
 void CMod_LoadBrushes( lump_t *l ) {
 	dbrush_t	*in;
 	cbrush_t	*out;
-	int			i, count;
+	int			i, count, first, num;
 
 	in = (void *)(cmod_base + l->fileofs);
 	if (l->filelen % sizeof(*in)) {
@@ -247,8 +279,17 @@ void CMod_LoadBrushes( lump_t *l ) {
 	out = cm.brushes;
 
 	for ( i=0 ; i<count ; i++, out++, in++ ) {
-		out->sides = cm.brushsides + LittleLong(in->firstSide);
-		out->numsides = LittleLong(in->numSides);
+		first = LittleLong( in->firstSide );
+		num = LittleLong( in->numSides );
+		// the sides are indexed by the trace, and CM_BoundBrush below reads six
+		// of them from the brush side array, which ends with six box sides
+		if ( first < 0 || num < 0 || first > cm.numBrushSides ||
+				num > cm.numBrushSides - first ) {
+			Com_Error( ERR_DROP, "bad BSP: brush %i takes %i sides from %i, the map has %i",
+				i, num, first, cm.numBrushSides );
+		}
+		out->sides = cm.brushsides + first;
+		out->numsides = num;
 
 		out->shaderNum = LittleLong( in->shaderNum );
 		if ( out->shaderNum < 0 || out->shaderNum >= cm.numShaders ) {
@@ -293,6 +334,17 @@ void CMod_LoadLeafs (lump_t *l)
 		out->numLeafBrushes = LittleLong (in->numLeafBrushes);
 		out->firstLeafSurface = LittleLong (in->firstLeafSurface);
 		out->numLeafSurfaces = LittleLong (in->numLeafSurfaces);
+
+		// area sizes the portals array below as numAreas * numAreas * 4, in int,
+		// and cluster feeds numClusters + 1: both come straight from the file
+		if ( out->area < 0 || out->area >= MAX_MAP_AREAS ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf %i is in area %i, the format allows %i",
+				i, out->area, MAX_MAP_AREAS - 1 );
+		}
+		// every cluster needs at least one leaf, and the format caps those
+		if ( out->cluster >= MAX_MAP_LEAFS ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf %i is in cluster %i", i, out->cluster );
+		}
 
 		if (out->cluster >= cm.numClusters)
 			cm.numClusters = out->cluster + 1;
@@ -425,6 +477,10 @@ void CMod_LoadBrushSides (lump_t *l)
 
 	for ( i=0 ; i<count ; i++, in++, out++) {
 		num = LittleLong( in->planeNum );
+		if ( num < 0 || num >= cm.numPlanes ) {
+			Com_Error( ERR_DROP, "bad BSP: brush side %i uses plane %i, the map has %i",
+				i, num, cm.numPlanes );
+		}
 		out->plane = &cm.planes[num];
 		out->shaderNum = LittleLong( in->shaderNum );
 		if ( out->shaderNum < 0 || out->shaderNum >= cm.numShaders ) {
@@ -463,12 +519,28 @@ void CMod_LoadVisibility( lump_t *l ) {
 		Com_Memset( cm.visibility, 255, cm.clusterBytes );
 		return;
 	}
+	// a 1..VIS_HEADER-1 byte lump used to fall through to the copy below with a
+	// negative length, which Com_Memcpy takes as a ~2^64 byte copy
+	if ( len < VIS_HEADER ) {
+		Com_Error( ERR_DROP, "bad BSP: visibility lump is %i bytes, needs at least %i",
+			len, VIS_HEADER );
+	}
+
 	buf = cmod_base + l->fileofs;
+
+	cm.numClusters = LittleLong( ((int *)buf)[0] );
+	cm.clusterBytes = LittleLong( ((int *)buf)[1] );
+
+	// both come from the file and CM_ClusterPVS indexes
+	// visibility[ cluster * clusterBytes ], so they have to fit in the lump
+	if ( cm.numClusters < 0 || cm.clusterBytes < 0 ||
+			( cm.clusterBytes > 0 && cm.numClusters > ( len - VIS_HEADER ) / cm.clusterBytes ) ) {
+		Com_Error( ERR_DROP, "bad BSP: %i byte visibility lump cannot hold %i clusters of %i bytes",
+			len, cm.numClusters, cm.clusterBytes );
+	}
 
 	cm.vised = qtrue;
 	cm.visibility = Hunk_Alloc( len, h_high );
-	cm.numClusters = LittleLong( ((int *)buf)[0] );
-	cm.clusterBytes = LittleLong( ((int *)buf)[1] );
 	Com_Memcpy (cm.visibility, buf + VIS_HEADER, len - VIS_HEADER );
 }
 
@@ -491,6 +563,7 @@ void CMod_LoadPatches( lump_t *surfs, lump_t *verts ) {
 	vec3_t		points[MAX_PATCH_VERTS];
 	int			width, height;
 	int			shaderNum;
+	int			numVerts, firstVert;
 
 	in = (void *)(cmod_base + surfs->fileofs);
 	if (surfs->filelen % sizeof(*in))
@@ -501,6 +574,7 @@ void CMod_LoadPatches( lump_t *surfs, lump_t *verts ) {
 	dv = (void *)(cmod_base + verts->fileofs);
 	if (verts->filelen % sizeof(*dv))
 		Com_Error (ERR_DROP, "MOD_LoadBmodel: funny lump size");
+	numVerts = verts->filelen / sizeof(*dv);
 
 	// scan through all the surfaces, but only load patches,
 	// not planar faces
@@ -515,12 +589,21 @@ void CMod_LoadPatches( lump_t *surfs, lump_t *verts ) {
 		// load the full drawverts onto the stack
 		width = LittleLong( in->patchWidth );
 		height = LittleLong( in->patchHeight );
+		// both are bounded before the multiply so c cannot wrap
+		if ( width < 1 || height < 1 || width > MAX_PATCH_VERTS || height > MAX_PATCH_VERTS ) {
+			Com_Error( ERR_DROP, "bad BSP: patch %i is %i by %i", i, width, height );
+		}
 		c = width * height;
 		if ( c > MAX_PATCH_VERTS ) {
 			Com_Error( ERR_DROP, "ParseMesh: MAX_PATCH_VERTS" );
 		}
 
-		dv_p = dv + LittleLong( in->firstVert );
+		firstVert = LittleLong( in->firstVert );
+		if ( firstVert < 0 || firstVert > numVerts || c > numVerts - firstVert ) {
+			Com_Error( ERR_DROP, "bad BSP: patch %i draws %i verts from %i, the map has %i",
+				i, c, firstVert, numVerts );
+		}
+		dv_p = dv + firstVert;
 		for ( j = 0 ; j < c ; j++, dv_p++ ) {
 			points[j][0] = LittleFloat( dv_p->xyz[0] );
 			points[j][1] = LittleFloat( dv_p->xyz[1] );
@@ -528,6 +611,10 @@ void CMod_LoadPatches( lump_t *surfs, lump_t *verts ) {
 		}
 
 		shaderNum = LittleLong( in->shaderNum );
+		if ( shaderNum < 0 || shaderNum >= cm.numShaders ) {
+			Com_Error( ERR_DROP, "bad BSP: patch %i uses shader %i, the map has %i",
+				i, shaderNum, cm.numShaders );
+		}
 		patch->contents = cm.shaders[shaderNum].contentFlags;
 		patch->surfaceFlags = cm.shaders[shaderNum].surfaceFlags;
 
@@ -537,6 +624,62 @@ void CMod_LoadPatches( lump_t *surfs, lump_t *verts ) {
 }
 
 //==================================================================
+
+/*
+=================
+CMod_ValidateIndexes
+
+The leaf and submodel index ranges can only be checked once every lump they point
+into is loaded: CMod_LoadLeafs runs before the leaf brush and leaf surface lists,
+and CMod_LoadSubmodels before CMod_LoadPatches.
+=================
+*/
+static void CMod_ValidateIndexes( void ) {
+	cLeaf_t	*leaf;
+	int		i, j;
+
+	for ( i = 0 ; i < cm.numLeafs ; i++ ) {
+		leaf = &cm.leafs[i];
+		if ( leaf->firstLeafBrush < 0 || leaf->numLeafBrushes < 0 ||
+				leaf->firstLeafBrush > cm.numLeafBrushes - leaf->numLeafBrushes ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf %i takes %i brushes from %i, the map has %i",
+				i, leaf->numLeafBrushes, leaf->firstLeafBrush, cm.numLeafBrushes );
+		}
+		if ( leaf->firstLeafSurface < 0 || leaf->numLeafSurfaces < 0 ||
+				leaf->firstLeafSurface > cm.numLeafSurfaces - leaf->numLeafSurfaces ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf %i takes %i surfaces from %i, the map has %i",
+				i, leaf->numLeafSurfaces, leaf->firstLeafSurface, cm.numLeafSurfaces );
+		}
+	}
+
+	// every entry of both lists is used as an index into cm.brushes or
+	// cm.surfaces by the trace
+	for ( i = 0 ; i < cm.numLeafBrushes ; i++ ) {
+		if ( cm.leafbrushes[i] < 0 || cm.leafbrushes[i] >= cm.numBrushes ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf brush %i refers to brush %i of %i",
+				i, cm.leafbrushes[i], cm.numBrushes );
+		}
+	}
+	for ( i = 0 ; i < cm.numLeafSurfaces ; i++ ) {
+		if ( cm.leafsurfaces[i] < 0 || cm.leafsurfaces[i] >= cm.numSurfaces ) {
+			Com_Error( ERR_DROP, "bad BSP: leaf surface %i refers to surface %i of %i",
+				i, cm.leafsurfaces[i], cm.numSurfaces );
+		}
+	}
+
+	// submodel leaves hold their own lists in the hunk, so they are indexed by
+	// the offset their loader stored rather than by a slot in the world lists
+	for ( i = 1 ; i < cm.numSubModels ; i++ ) {
+		leaf = &cm.cmodels[i].leaf;
+		for ( j = 0 ; j < leaf->numLeafSurfaces ; j++ ) {
+			if ( cm.leafsurfaces[ leaf->firstLeafSurface + j ] < 0 ||
+					cm.leafsurfaces[ leaf->firstLeafSurface + j ] >= cm.numSurfaces ) {
+				Com_Error( ERR_DROP, "bad BSP: model %i surface %i refers to surface %i of %i",
+					i, j, cm.leafsurfaces[ leaf->firstLeafSurface + j ], cm.numSurfaces );
+			}
+		}
+	}
+}
 
 unsigned CM_LumpChecksum(lump_t *lump) {
 	return LittleLong (Com_BlockChecksum (cmod_base + lump->fileofs, lump->filelen));
@@ -557,6 +700,47 @@ unsigned CM_Checksum(dheader_t *header) {
 	checksums[10] = CM_LumpChecksum(&header->lumps[LUMP_DRAWVERTS]);
 
 	return LittleLong(Com_BlockChecksum(checksums, 11 * 4));
+}
+
+/*
+=================
+CMod_ValidateLumps
+
+A .bsp can arrive from a downloaded map or a pk3 dropped into base/, so nothing in
+the header can be trusted: every CMod_Load* below binds cmod_base + fileofs and then
+uses filelen as a count. Check the whole lump table before any of them run.
+=================
+*/
+static void CMod_ValidateLumps( const dheader_t *header, int length, const char *name ) {
+	int				i;
+	const lump_t	*l;
+
+	if ( header->ident != BSP_IDENT ) {
+		Com_Error( ERR_DROP, "bad BSP: %s has ident %u, not IBSP",
+			name, (unsigned int)header->ident );
+	}
+	if ( header->version != BSP_VERSION ) {
+		Com_Error (ERR_DROP, "bad BSP: %s has wrong version number (%i should be %i)"
+		, name, header->version, BSP_VERSION );
+	}
+
+	for ( i = 0 ; i < HEADER_LUMPS ; i++ ) {
+		l = &header->lumps[i];
+		// a lump that runs before the start of the file or past its end used to
+		// reach the loaders as a raw pointer plus a copy size
+		if ( l->fileofs < 0 || l->filelen < 0 || l->fileofs > length ||
+				l->filelen > length - l->fileofs ) {
+			Com_Error( ERR_DROP, "bad BSP: %s lump %i runs from %i for %i bytes, the file is %i bytes",
+				name, i, l->fileofs, l->filelen, length );
+		}
+	}
+
+	// the visibility lump carries its own header, which CMod_LoadVisibility copies
+	l = &header->lumps[LUMP_VISIBILITY];
+	if ( l->filelen != 0 && l->filelen < VIS_HEADER ) {
+		Com_Error( ERR_DROP, "bad BSP: visibility lump is %i bytes, needs at least %i",
+			l->filelen, VIS_HEADER );
+	}
 }
 
 /*
@@ -621,15 +805,17 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	last_checksum = LittleLong (Com_BlockChecksum (buf.i, length));
 	*checksum = last_checksum;
 
+	if ( length < (int)sizeof( dheader_t ) ) {
+		Com_Error( ERR_DROP, "bad BSP: %s is %i bytes, too short for a BSP header",
+			name, length );
+	}
+
 	header = *(dheader_t *)buf.i;
 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++) {
 		((int *)&header)[i] = LittleLong ( ((int *)&header)[i]);
 	}
 
-	if ( header.version != BSP_VERSION ) {
-		Com_Error (ERR_DROP, "CM_LoadMap: %s has wrong version number (%i should be %i)"
-		, name, header.version, BSP_VERSION );
-	}
+	CMod_ValidateLumps( &header, length, name );
 
 	cmod_base = (byte *)buf.i;
 
@@ -640,12 +826,16 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	CMod_LoadLeafSurfaces (&header.lumps[LUMP_LEAFSURFACES]);
 	CMod_LoadPlanes (&header.lumps[LUMP_PLANES]);
 	CMod_LoadBrushSides (&header.lumps[LUMP_BRUSHSIDES]);
+	// the spare sides CM_BoundBrush may read have to exist before any brush
+	CM_InitBoxSides ();
 	CMod_LoadBrushes (&header.lumps[LUMP_BRUSHES]);
 	CMod_LoadSubmodels (&header.lumps[LUMP_MODELS]);
 	CMod_LoadNodes (&header.lumps[LUMP_NODES]);
 	CMod_LoadEntityString (&header.lumps[LUMP_ENTITIES]);
 	CMod_LoadVisibility( &header.lumps[LUMP_VISIBILITY] );
 	CMod_LoadPatches( &header.lumps[LUMP_SURFACES], &header.lumps[LUMP_DRAWVERTS] );
+
+	CMod_ValidateIndexes();
 
 	// we are NOT freeing the file, because it is cached for the ref
 	FS_FreeFile (buf.v);
@@ -738,13 +928,18 @@ int		CM_LeafArea( int leafnum ) {
 
 /*
 ===================
-CM_InitBoxHull
+CM_InitBoxSides
 
-Set up the planes and nodes so that the six floats of a bounding box
-can just be stored out and get a proper clipping hull structure.
+Point the BOX_SIDES spare brush sides at the box planes.
+
+CM_BoundBrush reads six sides from every brush even when the brush has fewer,
+which is legal (a four plane brush is fine), so the overread runs into these
+spare slots. They have to be set up before the first CMod_LoadBrushes, not with
+the rest of the box hull afterwards, or a short brush bounds against whatever
+the hunk happened to hold.
 ===================
 */
-void CM_InitBoxHull (void)
+void CM_InitBoxSides (void)
 {
 	int			i;
 	int			side;
@@ -753,17 +948,7 @@ void CM_InitBoxHull (void)
 
 	box_planes = &cm.planes[cm.numPlanes];
 
-	box_brush = &cm.brushes[cm.numBrushes];
-	box_brush->numsides = 6;
-	box_brush->sides = cm.brushsides + cm.numBrushSides;
-	box_brush->contents = CONTENTS_BODY;
-
-	box_model.leaf.numLeafBrushes = 1;
-//	box_model.leaf.firstLeafBrush = cm.numBrushes;
-	box_model.leaf.firstLeafBrush = cm.numLeafBrushes;
-	cm.leafbrushes[cm.numLeafBrushes] = cm.numBrushes;
-
-	for (i=0 ; i<6 ; i++)
+	for (i=0 ; i<BOX_SIDES ; i++)
 	{
 		side = i&1;
 
@@ -786,7 +971,35 @@ void CM_InitBoxHull (void)
 		p->normal[i>>1] = -1;
 
 		SetPlaneSignbits( p );
-	}	
+	}
+
+	// only CM_TempBoxModel sets these distances, so a brush short enough to
+	// bound against them reads them before anything has run
+	for (i = 0 ; i < BOX_PLANES ; i++)
+	{
+		box_planes[i].dist = 0;
+	}
+}
+
+/*
+===================
+CM_InitBoxHull
+
+Set up the planes and nodes so that the six floats of a bounding box
+can just be stored out and get a proper clipping hull structure.
+===================
+*/
+void CM_InitBoxHull (void)
+{
+	box_brush = &cm.brushes[cm.numBrushes];
+	box_brush->numsides = 6;
+	box_brush->sides = cm.brushsides + cm.numBrushSides;
+	box_brush->contents = CONTENTS_BODY;
+
+	box_model.leaf.numLeafBrushes = 1;
+//	box_model.leaf.firstLeafBrush = cm.numBrushes;
+	box_model.leaf.firstLeafBrush = cm.numLeafBrushes;
+	cm.leafbrushes[cm.numLeafBrushes] = cm.numBrushes;
 }
 
 /*
