@@ -19,6 +19,9 @@ skaar_strict_target(skaar_tests)
 set_target_properties(skaar_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
 
 add_test(NAME skaar_tests COMMAND skaar_tests)
+# a non-terminating case (a `while (!sim.Finished())` loop after a regression)
+# would otherwise hang ctest for its 1500 s default
+set_tests_properties(skaar_tests PROPERTIES TIMEOUT 300)
 
 # Movement (P5, docs/plan-P5.md): the C++ pmove port against Q3's C bg_pmove.c
 # (byte-identical vq3), plus the cpm ruleset's physics. Also tools/movetest/run.sh.

@@ -56,7 +56,8 @@ inline void Fail(const char* file, int line, const std::string& what) {
 #define CHECK_NEAR(a, b, eps)                                                                              \
     do {                                                                                                   \
         const double check_a = (a), check_b = (b);                                                         \
-        if (std::fabs(check_a - check_b) > (eps)) {                                                        \
+        /* negated <= so a NaN on either side fails: NaN > eps is false, NaN <= eps is false too */         \
+        if (!(std::fabs(check_a - check_b) <= (eps))) {                                                     \
             check::Fail(__FILE__, __LINE__,                                                                \
                         std::string(#a " ~= " #b ": ") + std::to_string(check_a) + " vs " + std::to_string(check_b)); \
         }                                                                                                  \

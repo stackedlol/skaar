@@ -64,16 +64,28 @@ TEST("scenario defaults, comments and ranges") {
     CHECK(s.ruleset == "vq3" && !s.playerMove);
     CHECK(ParseScenario("y", R"({"player": {"move": true, "ruleset": "cpm"}})", s, error));
     CHECK(s.ruleset == "cpm" && s.playerMove);
+    // docs/scenarios.md's documented ranges hold exactly at the bounds; one step
+    // outside is in the bad list below
+    CHECK(ParseScenario("z", R"({"duration": 5, "targets": {"alive": 1, "radius": 1,
+        "spawn": {"distance": 64}, "motion": {"type": "strafe", "changeEvery": 0.05}}})", s, error));
+    CHECK_NEAR(s.targets.changeEvery.min, 0.05, 1e-6);
+    CHECK(ParseScenario("z", R"({"duration": 600, "targets": {"alive": 16, "radius": 256,
+        "spawn": {"distance": 64}}})", s, error));
 }
 
 TEST("bad scenarios are rejected with a reason") {
     const char* bad[] = {
         R"({"duration": 1})",
+        R"({"duration": 601})",
         R"({"targets": {"alive": 0}})",
+        R"({"targets": {"alive": 17}})",
         R"({"targets": {"radius": 0}})",
+        R"({"targets": {"radius": 257}})",
         R"({"fire": "burst"})",
         R"({"targets": {"alive": 9, "spawn": {"shape": "grid", "cols": 3, "rows": 3}}})",
         R"({"targets": {"spawn": {"distance": 10}}})",
+        R"({"targets": {"spawn": {"distance": 63}}})",
+        R"({"targets": {"motion": {"type": "strafe", "changeEvery": 0.01}}})",
         R"({"targets": {"motion": {"type": "zigzag"}}})",
         R"({"player": {"ruleset": "cpm; quit"}})",
         R"({"player": {"ruleset": ""}})",

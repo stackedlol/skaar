@@ -17,7 +17,12 @@ jobs:
       - name: Tools
         run: brew install ninja ccache
       - name: Build (fast)
-        run: ./scripts/build.sh fast
+        # tee so a failed build still leaves logs/ for the artifact below
+        # (build.sh writes to the terminal; smoke.sh is what creates logs/)
+        run: |
+          mkdir -p logs
+          set -o pipefail
+          ./scripts/build.sh fast 2>&1 | tee logs/build-fast.log
       - name: Smoke (safe build, unit tests, dedicated server)
         run: ./scripts/smoke.sh
       - name: Logs
@@ -26,6 +31,7 @@ jobs:
         with:
           name: logs-macos
           path: logs/
+          if-no-files-found: ignore
 
   linux:
     name: Linux x86_64
@@ -37,7 +43,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build ccache libsdl2-dev
       - name: Build (fast)
-        run: ./scripts/build.sh fast
+        run: |
+          mkdir -p logs
+          set -o pipefail
+          ./scripts/build.sh fast 2>&1 | tee logs/build-fast.log
       - name: Smoke (safe build, unit tests, dedicated server)
         run: ./scripts/smoke.sh
       - name: Logs
@@ -46,16 +55,29 @@ jobs:
         with:
           name: logs-linux
           path: logs/
+          if-no-files-found: ignore
 
   windows:
-    name: Windows x64 (build only)
+    # Our scripts are POSIX, so this job drives cmake directly; it is the only
+    # place the C++ modules are built with MSVC. /W4 is not cleaned up yet,
+    # hence SKAAR_WERROR=OFF.
+    name: Windows x64
     runs-on: windows-2022
-    # Allowed to fail until the MSVC pass in Phase 2: our scripts are POSIX
-    # and /W4 hasn't been cleaned up yet (SKAAR_WERROR=OFF meanwhile)
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DSKAAR_WERROR=OFF
       - name: Build
         run: cmake --build build --config RelWithDebInfo
+      - name: Unit tests and the movement parity check
+        run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
+      - name: Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-windows
+          path: |
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeOutput.log
+            build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

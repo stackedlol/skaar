@@ -18,5 +18,10 @@ foreach(ENTRY ${ENTRIES})
         message(WARNING "skaar_data: ${LINK} exists and is not a symlink, leaving it")
         continue()
     endif()
-    file(CREATE_LINK ${DATA_DIR}/${ENTRY} ${LINK} SYMBOLIC)
+    # COPY_ON_ERROR: a host that can't create symlinks (Windows without
+    # SeCreateSymbolicLinkPrivilege) gets a copy instead of aborting, because
+    # skaar_data is an ALL target and would fail the whole build. Data edits
+    # then need the copy removed, which the check above does not do for a
+    # non-symlink (it assumes the user put a real directory there).
+    file(CREATE_LINK ${DATA_DIR}/${ENTRY} ${LINK} SYMBOLIC COPY_ON_ERROR)
 endforeach()

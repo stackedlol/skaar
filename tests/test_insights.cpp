@@ -38,11 +38,14 @@ TEST("streak counts consecutive days ending today or yesterday") {
 }
 
 TEST("session ends at a 30 minute gap") {
+    // 31 min apart: a new session; then two 30 min gaps (29 min of empty time
+    // each, since a run is credited its own duration) that must stay inside it,
+    // so only a threshold in [29 min, 31 min) gives this shape
     std::vector<RunSummary> h = {
         Run("a", {2026, 10, 22, 10, 0, 0}, 1),
-        Run("a", {2026, 10, 22, 12, 0, 0}, 1),   // > 30 min after the last
-        Run("a", {2026, 10, 22, 12, 10, 0}, 1),
-        Run("a", {2026, 10, 22, 12, 25, 0}, 1),
+        Run("a", {2026, 10, 22, 10, 32, 0}, 1),  // 31 min after the last
+        Run("a", {2026, 10, 22, 11, 2, 0}, 1),
+        Run("a", {2026, 10, 22, 11, 32, 0}, 1),
     };
     const ins::Overview o = ins::Summarize(h, {2026, 10, 22, 13, 0, 0});
     CHECK(o.sessionRuns == 3);
@@ -51,17 +54,19 @@ TEST("session ends at a 30 minute gap") {
 }
 
 TEST("personal bests and trend") {
+    // the earlier window averages 50, not 100, so a fractional trend and an
+    // absolute delta over a hard-coded 100 can be told apart
     std::vector<RunSummary> h;
     for (int i = 0; i < 20; i++) {
-        h.push_back(Run("a", {2026, 10, 1 + i, 12, 0, 0}, i < 10 ? 100.0f : 110.0f));
+        h.push_back(Run("a", {2026, 10, 1 + i, 12, 0, 0}, i < 10 ? 50.0f : 60.0f));
     }
     h.push_back(Run("b", {2026, 10, 21, 12, 0, 0}, 5));
     const auto per = ins::PerScenario(h);
     const ins::ScenarioStats& a = per.at("a");
     CHECK(a.runs.size() == 20);
-    CHECK_NEAR(a.best, 110, 1e-4);
-    CHECK(a.bestRun == 10);  // the first 110; later equal scores aren't new bests
-    CHECK_NEAR(a.trend, 0.10, 1e-4);
+    CHECK_NEAR(a.best, 60, 1e-4);
+    CHECK(a.bestRun == 10);  // the first 60; later equal scores aren't new bests
+    CHECK_NEAR(a.trend, 0.20, 1e-4);
     CHECK(ins::IsPersonalBest(h, 0) && ins::IsPersonalBest(h, 10) && !ins::IsPersonalBest(h, 11));
     CHECK(ins::IsPersonalBest(h, 20));  // first run of b
 }

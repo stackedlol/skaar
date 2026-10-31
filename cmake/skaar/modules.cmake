@@ -2,6 +2,16 @@
 # Target names match the upstream ones (qagame_base...) so scripts/rebuild.sh
 # and the output paths (<config>/base/*.dylib) stay the same.
 
+if(BUILD_GAME_QVMS)
+    # basegame.cmake's QVM rule builds C, and these modules are native C++20
+    # libraries with no QVM entry point; say so rather than emit nothing
+    message(WARNING "BUILD_GAME_QVMS: Skaar's game modules are native libraries only, no .qvm files are produced")
+endif()
+if(NOT BUILD_GAME_LIBRARIES)
+    message(STATUS "BUILD_GAME_LIBRARIES=OFF: not building the game modules")
+    return()
+endif()
+
 include(utils/set_output_dirs)
 
 enable_language(CXX)
@@ -32,6 +42,13 @@ function(skaar_module TARGET OUTPUT DEFINE)
     target_link_libraries(${TARGET} PRIVATE ${COMMON_LIBRARIES})
     # strict warnings on our C++ only; the reused Q3 C keeps upstream flags
     target_compile_options(${TARGET} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${SKAAR_STRICT_FLAGS}>)
+    if(NOT MSVC)
+        # No FMA contraction anywhere in a module: move_pmove.cpp and the
+        # q_math.c it calls must do the arithmetic skaar_movetest certifies as
+        # byte-identical to bg_pmove.c (cmake/skaar/tests.cmake), not the one
+        # clang picks by default at -O2
+        target_compile_options(${TARGET} PRIVATE -ffp-contract=off)
+    endif()
     set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME ${GAME_MODULE_OUTPUT_${OUTPUT}})
     set_output_dirs(${TARGET} SUBDIRECTORY ${BASEGAME})
 endfunction()

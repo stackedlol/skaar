@@ -69,6 +69,14 @@ TEST("weapon registry by slot and id") {
     AddWeapon(rail2);
     CHECK(Weapons().size() == 5);
     CHECK_NEAR(WeaponById("rail")->damage, 70, 1e-6);
+    // a different id on an occupied slot replaces it too (docs/weapons.md: one
+    // weapon per slot), or WeaponBySlot would hand the HUD and WP_* the wrong gun
+    WeaponDef ak47;
+    CHECK(ParseWeapon("ak47", R"({"slot": 7, "damage": 30})", ak47, error));
+    AddWeapon(ak47);
+    CHECK(Weapons().size() == 5);
+    CHECK(WeaponBySlot(7) && WeaponBySlot(7)->id == "ak47");
+    CHECK(!WeaponById("rail"));
     ResetWeapons();
 }
 

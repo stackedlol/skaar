@@ -117,6 +117,12 @@ else()
     include(skaar/modules)
 endif()
 if(BUILD_MISSIONPACK)
+    # missionpack.cmake reuses basegame.cmake's source lists and target names;
+    # without them every target name is empty and configure dies with a cascade
+    # of "incorrect number of arguments" errors instead of saying why
+    if(NOT BUILD_BASEQ3_MODULES)
+        message(FATAL_ERROR "BUILD_MISSIONPACK needs BUILD_BASEQ3_MODULES=ON (Team Arena is built from the stock Q3 C modules)")
+    endif()
     include(missionpack)
 endif()
 
